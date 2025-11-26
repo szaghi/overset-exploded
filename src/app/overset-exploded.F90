@@ -283,27 +283,74 @@ contains
       endfunction compute_extents
    endsubroutine load_nodes
 
-   subroutine save_block_file(self, b)
+   subroutine save_block_file(self, b, rcc)
    !< Save block data into its own file.
    class(block_object), intent(in) :: self      !< Block data.
    integer(I4P),        intent(in) :: b         !< Current block number, global numeration.
-   character(len=:), allocatable   :: file_name !< Block file name.
+   real(R4P),           intent(in) :: rcc(1:)   !< rcc unstructured array.
+   character(len=6)                :: bstr      !< Block number stringified.
    integer(I4P)                    :: file_unit !< Block unit file.
-   integer(I4P)                    :: i,j,k     !< Counter.
+   integer(I4P)                    :: i,j,k,p,n !< Counter.
+   integer(I4P)                    :: offset    !< Offset of rcc.
 
-   file_name = repeat(' ',6)
-   write(file_name, '(I6.5)') b
-   file_name = 'block-'//trim(adjustl(file_name))//'.blk'
-   open(newunit=file_unit, file=trim(adjustl(file_name)), form='unformatted', action='write')
-   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes,icc=>self%icc,rcc=>self%rcc)
+   write(bstr, '(I6.5)') b
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes,icc=>self%icc)
+   ! file grid
+   open(newunit=file_unit, file='block-'//trim(adjustl(bstr))//'.blk', form='unformatted', action='write')
    write(file_unit) self%Ni, self%Nj, self%Nk, self%gc
    write(file_unit)(((nodes(1,i,j,k),i=0-gc(1),Ni+gc(2)),j=0-gc(3),Nj+gc(4)),k=0-gc(5),Nk+gc(6))
    write(file_unit)(((nodes(2,i,j,k),i=0-gc(1),Ni+gc(2)),j=0-gc(3),Nj+gc(4)),k=0-gc(5),Nk+gc(6))
    write(file_unit)(((nodes(3,i,j,k),i=0-gc(1),Ni+gc(2)),j=0-gc(3),Nj+gc(4)),k=0-gc(5),Nk+gc(6))
-   write(file_unit)(((icc(    i,j,k),i=1-gc(1),Ni+gc(2)),j=1-gc(3),Nj+gc(4)),k=1-gc(5),Nk+gc(6))
-   write(file_unit)(((rcc(    i,j,k),i=1-gc(1),Ni+gc(2)),j=1-gc(3),Nj+gc(4)),k=1-gc(5),Nk+gc(6))
-   endassociate
    close(file_unit)
+   ! file rcc
+   open(newunit=file_unit, file='block-rcc-'//trim(adjustl(bstr))//'.blk', form='unformatted', action='write')
+   write(file_unit) self%Ni, self%Nj, self%Nk, self%gc
+   do k=1-gc(1), Nk+gc(2)
+   do j=1-gc(3), Nj+gc(4)
+   do i=1-gc(5), Ni+gc(6)
+      p = icc(i,j,k)
+      if (p<0) then ! natural BC
+         select case(p)
+         case(-1 )
+            write(file_unit) 'WALL'
+         case(-2 )
+            write(file_unit) 'SIMMETRY'
+         case(-3 )
+            write(file_unit) 'INFLOW'
+         case(-4 )
+            write(file_unit) 'INOUTFLOW'
+         case(-5 )
+            write(file_unit) 'ASSIGNED-INFLOW'
+         case(-6 )
+            write(file_unit) 'ASSIGNED-PRESSURE'
+         case(-7 )
+            write(file_unit) 'ASSIGNED-NORMAL-VELOCITY'
+         case(-8 )
+            write(file_unit) 'ASSIGNED-RIEMANN'
+         case(-9 )
+            write(file_unit) 'EXTRAPOLATED'
+         case(-10)
+            write(file_unit) 'MOVING-WALL'
+         case(-11)
+            write(file_unit) 'INACTIVE-WALL'
+         case(-19)
+            write(file_unit) 'EXTRAPOLATED-ALT'
+         endselect
+      elseif (p==0) then
+         write(file_unit) 'ACTIVE-CELL'
+      else ! chimera-like BC (chimera, adjacent...)
+         write(file_unit) nint(rcc(p),I4P) ! chimera type
+         write(file_unit) nint(rcc(p+1),I4P) ! donors number
+         do n=1, nint(rcc(p+1),I4P)
+            offset = p + 1 + 5*(n-1)
+            write(file_unit) nint(rcc(offset+1)), nint(rcc(offset+2)), nint(rcc(offset+3)), nint(rcc(offset+4)) ! b,i,j,k donor
+            write(file_unit) rcc(offset+5) ! donor weight
+         enddo
+      endif
+   enddo
+   enddo
+   enddo
+   endassociate
    endsubroutine save_block_file
 
    pure subroutine traslate(self, traslation)
@@ -327,7 +374,7 @@ contains
 endmodule oe_block_object
 
 program overset_exploded
-!< Overse-Exploded program, convert overset output files into exploded per-block files.
+!< Overset-Exploded program, convert overset output files into exploded per-block files.
 
 use, intrinsic :: iso_fortran_env, only : R4P=>real32, R8P=>real64, I4P=>int32, stderr=>error_unit
 use oe_block_object
@@ -389,7 +436,7 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
    close(file_unit_icc)
    do b=1, blocks_number
       call blocks(b)%compute_cc(rcc=rcc)
-      call blocks(b)%save_block_file(b=b)
+      call blocks(b)%save_block_file(b=b, rcc=rcc)
    enddo
 else
    write(stderr, "(A)")'error: file "'//trim(adjustl(file_name_grd))//'" or '//&

@@ -10,28 +10,29 @@ public :: block_object
 
 type :: block_object
    !<  Block class.
-   integer(I4P)              :: Ni=0                   !< Number of cells in i direction.
-   integer(I4P)              :: Nj=0                   !< Number of cells in j direction.
-   integer(I4P)              :: Nk=0                   !< Number of cells in k direction.
-   integer(I4P)              :: gc(6)=[2,2,2,2,2,2]    !< Number of ghost cells.
-   real(R8P),    allocatable :: nodes(:,:,:,:)         !< Nodes coordinates.
-   real(R8P),    allocatable :: centers(:,:,:,:)       !< Centers coordinates.
-   real(R8P),    allocatable :: extents(:,:)           !< Box extents, [min, max].
-   integer(I4P), allocatable :: icc(:,:,:)             !< Cell centered icc values.
-   real(R4P),    allocatable :: rcc(:,:,:)             !< Cell centered rcc values.
-   integer(I4P), allocatable :: tcc(:,:,:)             !< Cell centered tcc values.
-   logical                   :: is_loaded=.false.      !< Flag for checking if the block is loaded.
+   integer(I4P)              :: Ni=0              !< Number of cells in i direction.
+   integer(I4P)              :: Nj=0              !< Number of cells in j direction.
+   integer(I4P)              :: Nk=0              !< Number of cells in k direction.
+   integer(I4P)              :: gc=2              !< Number of ghost cells.
+   real(R8P),    allocatable :: nodes(:,:,:,:)    !< Nodes coordinates.
+   integer(I4P), allocatable :: icc(:,:,:)        !< Cell centered icc values.
+   integer(I4P), allocatable :: adj(:,:)          !< New adjacent-BC indexes for split blocks [1:4,nadj].
+   integer(I4P)              :: nadj=0            !< Number of new adjacent-BC cells.
+   integer(I4P)              :: ab=0              !< Absolute block index.
+   integer(I4P)              :: group=0           !< Index of gruop.
+   integer(I4P)              :: body=0            !< Index of body.
+   integer(I4P)              :: proc=0            !< Processor assigned to.
+   logical                   :: is_loaded=.false. !< Flag for checking if the block is loaded.
    contains
       ! public methods
-      procedure, pass(self) :: destroy             !< Destroy dynamic memory.
-      procedure, pass(self) :: alloc               !< Allocate dynamic memory.
-      procedure, pass(self) :: compute_cc          !< Compute cells centered rcc and tcc from unstructured rcc.
-      procedure, pass(self) :: get_patches_extents !< Return the patches extents of given patch boundary conditions.
-      procedure, pass(self) :: load_dimensions     !< Load block dimensions from file.
-      procedure, pass(self) :: load_icc            !< Load block icc from file.
-      procedure, pass(self) :: load_nodes          !< Load block nodes from file.
-      procedure, pass(self) :: save_block_file     !< Save block data into its own file.
-      procedure, pass(self) :: traslate            !< Traslate block nodes by a given traslation vector.
+      procedure, pass(self) :: destroy         !< Destroy dynamic memory.
+      procedure, pass(self) :: alloc           !< Allocate dynamic memory.
+      procedure, pass(self) :: load_dimensions !< Load block dimensions from file.
+      procedure, pass(self) :: load_icc        !< Load block icc from file.
+      procedure, pass(self) :: load_nodes      !< Load block nodes from file.
+      procedure, pass(self) :: save_block_file !< Save block data into its own file.
+      procedure, pass(self) :: split           !< Split block.
+      procedure, pass(self) :: traslate        !< Traslate block nodes by a given traslation vector.
 endtype block_object
 
 contains
@@ -44,177 +45,39 @@ contains
    self%Nk = 0
    self%gc = 2
    if (allocated(self%nodes)) deallocate(self%nodes)
-   if (allocated(self%centers)) deallocate(self%centers)
-   if (allocated(self%extents)) deallocate(self%extents)
    if (allocated(self%icc)) deallocate(self%icc)
-   if (allocated(self%rcc)) deallocate(self%rcc)
-   if (allocated(self%tcc)) deallocate(self%tcc)
+   if (allocated(self%adj)) deallocate(self%adj)
+   self%nadj  = 0
+   self%ab    = 0
+   self%group = 0
+   self%body  = 0
+   self%proc  = 0
    self%is_loaded = .false.
    endsubroutine destroy
 
-   elemental subroutine alloc(self, is_centers_to_allocate, is_extents_to_allocate)
+   elemental subroutine alloc(self)
    !< Allocate dynamic memory.
-   class(block_object), intent(inout)        :: self                   !< Block data.
-   logical,             intent(in), optional :: is_centers_to_allocate !< Flag to allocate also centers array.
-   logical,             intent(in), optional :: is_extents_to_allocate !< Flag to allocate also extents arrays.
+   class(block_object), intent(inout) :: self !< Block data.
 
-   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc)
-   allocate(self%nodes(1:3,0-gc(1):Ni+gc(2),0-gc(3):Nj+gc(4),0-gc(5):Nk+gc(6)))
-   if (present(is_centers_to_allocate)) then
-      if (is_centers_to_allocate) allocate(self%centers(1:3,1-gc(1):Ni+gc(2),1-gc(3):Nj+gc(4),1-gc(5):Nk+gc(6)))
-   endif
-   if (present(is_extents_to_allocate)) then
-      if (is_extents_to_allocate) then
-         allocate(self%extents(1:3,1:2)) ! min-max
-      endif
-   endif
-   allocate(self%icc(1-gc(1):Ni+gc(2),1-gc(3):Nj+gc(4),1-gc(5):Nk+gc(6)))
-   allocate(self%rcc(1-gc(1):Ni+gc(2),1-gc(3):Nj+gc(4),1-gc(5):Nk+gc(6)))
-   allocate(self%tcc(1-gc(1):Ni+gc(2),1-gc(3):Nj+gc(4),1-gc(5):Nk+gc(6)))
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nadj=>self%nadj)
+   allocate(self%nodes(1:3,0-gc:Ni+gc,0-gc:Nj+gc,0-gc:Nk+gc))
+   allocate(self%icc(1-gc:Ni+gc,1-gc:Nj+gc,1-gc:Nk+gc))
+   if (nadj>0) allocate(self%adj(1:4,1:nadj))
    endassociate
    endsubroutine alloc
 
-   pure subroutine compute_cc(self, rcc)
-   !< Compute cells/nodes centered rcc and tcc from unstructured rcc.
-   class(block_object), intent(inout) :: self             !< Block data.
-   real(R4P),           intent(in)    :: rcc(1:)          !< Unstructured rcc.
-   integer(I4P)                       :: i,j,k            !< Counter.
-
-   do k=1, self%Nk
-   do j=1, self%Nj
-   do i=1, self%Ni
-      self%rcc(i,j,k) = 0
-      if (self%icc(i,j,k) > 0)       self%rcc(i,j,k) = nint(rcc(self%icc(i,j,k)))
-      if (self%rcc(i,j,k) > 28._R4P) self%rcc(i,j,k) = 0._R4P
-   enddo
-   enddo
-   enddo
-   do k=0, self%Nk+1
-   do j=0, self%Nj+1
-   do i=0, self%Ni+1
-      self%tcc(i,j,k) = 0
-      if (self%icc(i,j,k)>0) self%tcc(i,j,k) = abs(nint(rcc(self%icc(i,j,k))))
-   enddo
-   enddo
-   enddo
-   endsubroutine compute_cc
-
-   pure subroutine get_patches_extents(self, patch, patches_extents, offset)
-   !< Return the patches extents of given patch boundary conditions.
-   class(block_object),       intent(in)           :: self                   !< Block data.
-   integer(I4P),              intent(in)           :: patch                  !< Patch bc to be found.
-   integer(I4P), allocatable, intent(inout)        :: patches_extents(:,:)   !< Patches extents, [np, 13]. The second index means
-                                                                             !+ 0  => patch face (1,2,3,4,5,6);
-                                                                             !+ 1  => cell i-min;
-                                                                             !+ 2  => cell i-max;
-                                                                             !+ 3  => cell j-min;
-                                                                             !+ 4  => cell j-max;
-                                                                             !+ 5  => cell k-min;
-                                                                             !+ 6  => cell k-max;
-                                                                             !+ 7  => node i-min;
-                                                                             !+ 8  => node i-max;
-                                                                             !+ 9  => node j-min;
-                                                                             !+ 10 => node j-max;
-                                                                             !+ 11 => node k-min;
-                                                                             !+ 12 => node k-max;
-   integer(I4P),              intent(in), optional :: offset                 !< Offset from patch.
-   integer(I4P)                                    :: np                     !< Number of patches found.
-   integer(I4P)                                    :: offset_                !< Offset from patch, local variable.
-   integer(I4P), parameter                         :: ci1=1,  ci2=2,  cj1=3, &
-                                                      cj2=4,  ck1=5,  ck2=6, &
-                                                      ni1=7,  ni2=8,  nj1=9, &
-                                                      nj2=10, nk1=11, nk2=12 !< Named indexes.
-
-   if (allocated(patches_extents)) deallocate(patches_extents)
-   if (.not.allocated(self%tcc)) return
-   offset_ = 0 ; if (present(offset)) offset_ = offset
-   np = 0
-   associate(tcc=>self%tcc, Ni=>self%Ni, Nj=>self%Nj, Nk=>self%Nk)
-      if (any(tcc(0    , :    , :   ) == patch).or.any(tcc(0     , :    , :   ) == patch+10_I4P)) np = np + 1
-      if (any(tcc(Ni+1 , :    , :   ) == patch).or.any(tcc(Ni+1  , :    , :   ) == patch+10_I4P)) np = np + 1
-      if (any(tcc(:    , 0    , :   ) == patch).or.any(tcc(:     , 0    , :   ) == patch+10_I4P)) np = np + 1
-      if (any(tcc(:    , Nj+1 , :   ) == patch).or.any(tcc(:     , Nj+1 , :   ) == patch+10_I4P)) np = np + 1
-      if (any(tcc(:    , :    , 0   ) == patch).or.any(tcc(:     , :    , 0   ) == patch+10_I4P)) np = np + 1
-      if (any(tcc(:    , :    , Nk+1) == patch).or.any(tcc(:     , :    , Nk+1) == patch+10_I4P)) np = np + 1
-      if (np > 0) then
-         allocate(patches_extents(1:np, 0:12))
-         np = 0
-         if (any(tcc(0    , :    , :   ) == patch).or.any(tcc(0     , :    , :   ) == patch+10_I4P)) then
-            np = np + 1
-            patches_extents(np, 0) = 1
-            patches_extents(np, ci1) = 1 + offset_                  ; patches_extents(np, ci2) = 1 + offset_
-            patches_extents(np, cj1) = 1                            ; patches_extents(np, cj2) = Nj
-            patches_extents(np, ck1) = 1                            ; patches_extents(np, ck2) = Nk
-            patches_extents(np, ni1) = 0 + offset_                  ; patches_extents(np, ni2) = 0 + offset_
-            patches_extents(np, nj1) = patches_extents(np, cj1) - 1 ; patches_extents(np, nj2) = patches_extents(np, cj2)
-            patches_extents(np, nk1) = patches_extents(np, ck1) - 1 ; patches_extents(np, nk2) = patches_extents(np, ck2)
-         endif
-         if (any(tcc(Ni+1 , :    , :   ) == patch).or.any(tcc(Ni+1  , :    , :   ) == patch+10_I4P)) then
-            np = np + 1
-            patches_extents(np, 0) = 2
-            patches_extents(np, ci1) = Ni - offset_                 ; patches_extents(np, ci2) = Ni - offset_
-            patches_extents(np, cj1) = 1                            ; patches_extents(np, cj2) = Nj
-            patches_extents(np, ck1) = 1                            ; patches_extents(np, ck2) = Nk
-            patches_extents(np, ni1) = Ni - offset_                 ; patches_extents(np, ni2) = Ni - offset_
-            patches_extents(np, nj1) = patches_extents(np, cj1) - 1 ; patches_extents(np, nj2) = patches_extents(np, cj2)
-            patches_extents(np, nk1) = patches_extents(np, ck1) - 1 ; patches_extents(np, nk2) = patches_extents(np, ck2)
-         endif
-         if (any(tcc(:    , 0    , :   ) == patch).or.any(tcc(:     , 0    , :   ) == patch+10_I4P)) then
-            np = np + 1
-            patches_extents(np, 0) = 3
-            patches_extents(np, ci1) = 1                            ; patches_extents(np, ci2) = Ni
-            patches_extents(np, cj1) = 1 + offset_                  ; patches_extents(np, cj2) = 1 + offset_
-            patches_extents(np, ck1) = 1                            ; patches_extents(np, ck2) = Nk
-            patches_extents(np, ni1) = patches_extents(np, ci1) - 1 ; patches_extents(np, ni2) = patches_extents(np, ci2)
-            patches_extents(np, nj1) = 0 + offset_                  ; patches_extents(np, nj2) = 0 + offset_
-            patches_extents(np, nk1) = patches_extents(np, ck1) - 1 ; patches_extents(np, nk2) = patches_extents(np, ck2)
-         endif
-         if (any(tcc(:    , Nj+1 , :   ) == patch).or.any(tcc(:     , Nj+1 , :   ) == patch+10_I4P)) then
-            np = np + 1
-            patches_extents(np, 0) = 4
-            patches_extents(np, ci1) = 1                            ; patches_extents(np, ci2) = Ni
-            patches_extents(np, cj1) = Nj - offset_                 ; patches_extents(np, cj2) = Nj - offset_
-            patches_extents(np, ck1) = 1                            ; patches_extents(np, ck2) = Nk
-            patches_extents(np, ni1) = patches_extents(np, ci1) - 1 ; patches_extents(np, ni2) = patches_extents(np, ci2)
-            patches_extents(np, nj1) = Nj - offset_                 ; patches_extents(np, nj2) = Nj - offset_
-            patches_extents(np, nk1) = patches_extents(np, ck1) - 1 ; patches_extents(np, nk2) = patches_extents(np, ck2)
-         endif
-         if (any(tcc(:    , :    , 0   ) == patch).or.any(tcc(:     , :    , 0   ) == patch+10_I4P)) then
-            np = np + 1
-            patches_extents(np, 0) = 5
-            patches_extents(np, ci1) = 1               ; patches_extents(np, ci2) = Ni
-            patches_extents(np, cj1) = 1                                         ; patches_extents(np, cj2) = Nj
-            patches_extents(np, ck1) = 1 + offset_                  ; patches_extents(np, ck2) = 1 + offset_
-            patches_extents(np, ni1) = patches_extents(np, ci1) - 1 ; patches_extents(np, ni2) = patches_extents(np, ci2)
-            patches_extents(np, nj1) = patches_extents(np, cj1) - 1 ; patches_extents(np, nj2) = patches_extents(np, cj2)
-            patches_extents(np, nk1) = 0 + offset_                  ; patches_extents(np, nk2) = 0 + offset_
-         endif
-         if (any(tcc(:    , :    , Nk+1) == patch).or.any(tcc(:     , :    , Nk+1) == patch+10_I4P)) then
-            np = np + 1
-            patches_extents(np, 0) = 6
-            patches_extents(np, ci1) = 1                            ; patches_extents(np, ci2) = Ni
-            patches_extents(np, cj1) = 1                            ; patches_extents(np, cj2) = Nj
-            patches_extents(np, ck1) = Nk - offset_                 ; patches_extents(np, ck2) = Nk - offset_
-            patches_extents(np, ni1) = patches_extents(np, ci1) - 1 ; patches_extents(np, ni2) = patches_extents(np, ci2)
-            patches_extents(np, nj1) = patches_extents(np, cj1) - 1 ; patches_extents(np, nj2) = patches_extents(np, cj2)
-            patches_extents(np, nk1) = Nk - offset_                 ; patches_extents(np, nk2) = Nk - offset_
-         endif
-      endif
-   endassociate
-   endsubroutine get_patches_extents
-
-   subroutine load_dimensions(self, file_unit, is_centers_to_allocate, is_extents_to_allocate)
+   subroutine load_dimensions(self, ab, file_unit)
    !< Load block dimensions from file.
    !<
    !< @note The grd file must be already open and the current record-index must be at the proper block dimensions record.
-   class(block_object), intent(inout)        :: self                   !< Block data.
-   integer(I4P),        intent(in)           :: file_unit              !< Logical unit of grd file.
-   logical,             intent(in), optional :: is_centers_to_allocate !< Flag to allocate also centers array.
-   logical,             intent(in), optional :: is_extents_to_allocate !< Flag to allocate also extents arrays.
+   class(block_object), intent(inout) :: self      !< Block data.
+   integer(I4P),        intent(in)    :: ab        !< Absolute block index.
+   integer(I4P),        intent(in)    :: file_unit !< Logical unit of grd file.
 
    call self%destroy
    read(file_unit, end=10, err=10) self%Ni, self%Nj, self%Nk, self%gc
-   10 call self%alloc(is_centers_to_allocate=is_centers_to_allocate, is_extents_to_allocate=is_extents_to_allocate)
+   10 call self%alloc
+   self%ab = ab
    endsubroutine load_dimensions
 
    subroutine load_icc(self, file_unit)
@@ -226,7 +89,7 @@ contains
    integer(I4P)                       :: i,j,k     !< Counter.
 
    associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc)
-      read(file_unit)(((icc(i,j,k),i=1-gc(1),Ni+gc(2)),j=1-gc(3),Nj+gc(4)),k=1-gc(5),Nk+gc(6))
+      read(file_unit)(((icc(i,j,k),i=1-gc,Ni+gc),j=1-gc,Nj+gc),k=1-gc,Nk+gc)
    endassociate
    endsubroutine load_icc
 
@@ -234,53 +97,15 @@ contains
    !< Load block nodes from file.
    !<
    !< @note The grd file must be already open and the current record-index must be at the proper block nodes record.
-   !<
-   !< @note If *centers* and *extents* are allocated they are computed from nodes values.
    class(block_object), intent(inout) :: self      !< Block data.
    integer(I4P),        intent(in)    :: file_unit !< Logical unit of grd file.
    integer(I4P)                       :: i,j,k     !< Counter.
 
    associate(Ni => self%Ni, Nj => self%Nj, Nk => self%Nk, gc => self%gc, nodes => self%nodes)
-      read(file_unit)(((nodes(1,i, j, k), i=0-gc(1),Ni+gc(2)), j=0-gc(3),Nj+gc(4)), k=0-gc(5),Nk+gc(6))
-      read(file_unit)(((nodes(2,i, j, k), i=0-gc(1),Ni+gc(2)), j=0-gc(3),Nj+gc(4)), k=0-gc(5),Nk+gc(6))
-      read(file_unit)(((nodes(3,i, j, k), i=0-gc(1),Ni+gc(2)), j=0-gc(3),Nj+gc(4)), k=0-gc(5),Nk+gc(6))
+      read(file_unit)(((nodes(1,i, j, k), i=0-gc,Ni+gc), j=0-gc,Nj+gc), k=0-gc,Nk+gc)
+      read(file_unit)(((nodes(2,i, j, k), i=0-gc,Ni+gc), j=0-gc,Nj+gc), k=0-gc,Nk+gc)
+      read(file_unit)(((nodes(3,i, j, k), i=0-gc,Ni+gc), j=0-gc,Nj+gc), k=0-gc,Nk+gc)
    endassociate
-   if (allocated(self%centers)) then
-      do k=1-self%gc(5),self%Nk+self%gc(6)
-      do j=1-self%gc(3),self%Nj+self%gc(4)
-      do i=1-self%gc(1),self%Ni+self%gc(2)
-         self%centers(1:3,i,j,k) = (self%nodes(1:3,i,   j,   k  ) + &
-                                    self%nodes(1:3,i-1, j,   k  ) + &
-                                    self%nodes(1:3,i  , j-1, k  ) + &
-                                    self%nodes(1:3,i  , j  , k-1) + &
-                                    self%nodes(1:3,i-1, j-1, k-1) + &
-                                    self%nodes(1:3,i  , j-1, k-1) + &
-                                    self%nodes(1:3,i-1, j  , k-1) + &
-                                    self%nodes(1:3,i-1, j-1, k  )) * 0.125_R8P
-      enddo
-      enddo
-      enddo
-   endif
-   if (allocated(self%extents)) self%extents = compute_extents(i_extents=[0,self%Ni], &
-                                                               j_extents=[0,self%Nj], &
-                                                               k_extents=[0,self%Nk])
-   contains
-      function compute_extents(i_extents, j_extents, k_extents) result(extents)
-      !< Compute (sub)block extents provided indexes extents.
-      integer(I4P), intent(in) :: i_extents(2) !< Index "i" extents (min, max) of the (sub)block.
-      integer(I4P), intent(in) :: j_extents(2) !< Index "j" extents (min, max) of the (sub)block.
-      integer(I4P), intent(in) :: k_extents(2) !< Index "k" extents (min, max) of the (sub)block.
-      real(R8P)                :: extents(3,2) !< Block extents.
-
-      extents(1,1) = minval(self%nodes(1,i_extents(1):i_extents(2), j_extents(1):j_extents(2), k_extents(1):k_extents(2)))
-      extents(1,2) = maxval(self%nodes(1,i_extents(1):i_extents(2), j_extents(1):j_extents(2), k_extents(1):k_extents(2)))
-
-      extents(2,1) = minval(self%nodes(2,i_extents(1):i_extents(2), j_extents(1):j_extents(2), k_extents(1):k_extents(2)))
-      extents(2,2) = maxval(self%nodes(2,i_extents(1):i_extents(2), j_extents(1):j_extents(2), k_extents(1):k_extents(2)))
-
-      extents(3,1) = minval(self%nodes(3,i_extents(1):i_extents(2), j_extents(1):j_extents(2), k_extents(1):k_extents(2)))
-      extents(3,2) = maxval(self%nodes(3,i_extents(1):i_extents(2), j_extents(1):j_extents(2), k_extents(1):k_extents(2)))
-      endfunction compute_extents
    endsubroutine load_nodes
 
    subroutine save_block_file(self, b, rcc)
@@ -298,60 +123,193 @@ contains
    ! file grid
    open(newunit=file_unit, file='block-'//trim(adjustl(bstr))//'.blk', form='unformatted', action='write')
    write(file_unit) self%Ni, self%Nj, self%Nk, self%gc
-   write(file_unit)(((nodes(1,i,j,k),i=0-gc(1),Ni+gc(2)),j=0-gc(3),Nj+gc(4)),k=0-gc(5),Nk+gc(6))
-   write(file_unit)(((nodes(2,i,j,k),i=0-gc(1),Ni+gc(2)),j=0-gc(3),Nj+gc(4)),k=0-gc(5),Nk+gc(6))
-   write(file_unit)(((nodes(3,i,j,k),i=0-gc(1),Ni+gc(2)),j=0-gc(3),Nj+gc(4)),k=0-gc(5),Nk+gc(6))
+   write(file_unit)(((nodes(1,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
+   write(file_unit)(((nodes(2,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
+   write(file_unit)(((nodes(3,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
    close(file_unit)
    ! file rcc
    open(newunit=file_unit, file='block-rcc-'//trim(adjustl(bstr))//'.blk', form='unformatted', action='write')
    write(file_unit) self%Ni, self%Nj, self%Nk, self%gc
-   do k=1-gc(1), Nk+gc(2)
-   do j=1-gc(3), Nj+gc(4)
-   do i=1-gc(5), Ni+gc(6)
+   do k=1-gc, Nk+gc
+   do j=1-gc, Nj+gc
+   do i=1-gc, Ni+gc
       p = icc(i,j,k)
-      if (p<0) then ! natural BC
-         select case(p)
+      if (p>0) then
+         select case(int(rcc(p),I4P))
          case(-1 )
-            write(file_unit) 'WALL'
+            write(file_unit) i,j,k,'WALL'
          case(-2 )
-            write(file_unit) 'SIMMETRY'
+            write(file_unit) i,j,k,'SIMMETRY'
          case(-3 )
-            write(file_unit) 'INFLOW'
+            write(file_unit) i,j,k,'INFLOW'
          case(-4 )
-            write(file_unit) 'INOUTFLOW'
+            write(file_unit) i,j,k,'INOUTFLOW'
          case(-5 )
-            write(file_unit) 'ASSIGNED-INFLOW'
+            write(file_unit) i,j,k,'ASSIGNED-INFLOW'
          case(-6 )
-            write(file_unit) 'ASSIGNED-PRESSURE'
+            write(file_unit) i,j,k,'ASSIGNED-PRESSURE'
          case(-7 )
-            write(file_unit) 'ASSIGNED-NORMAL-VELOCITY'
+            write(file_unit) i,j,k,'ASSIGNED-NORMAL-VELOCITY'
          case(-8 )
-            write(file_unit) 'ASSIGNED-RIEMANN'
+            write(file_unit) i,j,k,'ASSIGNED-RIEMANN'
          case(-9 )
-            write(file_unit) 'EXTRAPOLATED'
+            write(file_unit) i,j,k,'EXTRAPOLATED'
          case(-10)
-            write(file_unit) 'MOVING-WALL'
+            write(file_unit) i,j,k,'MOVING-WALL'
          case(-11)
-            write(file_unit) 'INACTIVE-WALL'
+            write(file_unit) i,j,k,'INACTIVE-WALL'
          case(-19)
-            write(file_unit) 'EXTRAPOLATED-ALT'
+            write(file_unit) i,j,k,'EXTRAPOLATED-ALT'
+         case(0)
+            ! save nothing for active cell
+         case(20:46)
+            write(file_unit) i,j,k,'CHIMERA'
+            write(file_unit) nint(rcc(p),I4P),nint(rcc(p+1),I4P) ! type, donors number
+            do n=1, nint(rcc(p+1),I4P)
+               offset = p + 1 + 5*(n-1)
+               write(file_unit) nint(rcc(offset+1)), nint(rcc(offset+2)), nint(rcc(offset+3)), nint(rcc(offset+4)) ! b,i,j,k donor
+               write(file_unit) rcc(offset+5) ! donor weight
+            enddo
+         case(60:66)
+            write(file_unit) i,j,k,'ADJACENT'
+            write(file_unit) nint(rcc(p+2)), nint(rcc(p+3)), nint(rcc(p+4)), nint(rcc(p+5)) ! b,i,j,k adjacent
+         case(80)
+         case default
+            print *, 'error: unknown icc "',int(rcc(p),I4P),'", b,i,j,k=',b,i,j,k
+            stop
          endselect
-      elseif (p==0) then
-         write(file_unit) 'ACTIVE-CELL'
-      else ! chimera-like BC (chimera, adjacent...)
-         write(file_unit) nint(rcc(p),I4P) ! chimera type
-         write(file_unit) nint(rcc(p+1),I4P) ! donors number
-         do n=1, nint(rcc(p+1),I4P)
-            offset = p + 1 + 5*(n-1)
-            write(file_unit) nint(rcc(offset+1)), nint(rcc(offset+2)), nint(rcc(offset+3)), nint(rcc(offset+4)) ! b,i,j,k donor
-            write(file_unit) rcc(offset+5) ! donor weight
-         enddo
+      elseif (p<0) then
+         ! this is a cell of a new block coming from a split, the new adjacent BC are in adj array
+         write(file_unit) i,j,k,'ADJACENT'
+         write(file_unit) self%adj(1:4,-p) ! b,i,j,k adjacent
       endif
    enddo
    enddo
    enddo
    endassociate
    endsubroutine save_block_file
+
+   pure subroutine split(self, mgl, is_split_done, sb)
+   !< Split block. Split current block (if possible), along a the largest direction, in half: the first
+   !< Block substitute current block, the other is added to blocks list.
+   class(block_object), intent(in)  :: self          !< Block data.
+   integer(I4P),        intent(in)  :: mgl           !< Number of levels of multi-grid to be preserved.
+   logical,             intent(out) :: is_split_done !< Sentinel to check is split has been done.
+   type(block_object),  intent(out) :: sb(2)         !< Split blocks.
+   integer(I4P)                     :: dir(1:3)      !< Ordered directions list.
+   integer(I4P)                     :: N             !< Current direction cells number.
+   integer(I4P)                     :: Ns(2)         !< Cells numbers in the two split blocks.
+   logical                          :: dir_found     !< Sentil to check direction found.
+   integer(I4P)                     :: delta(3)      !< Directions deltas.
+   integer(I4P)                     :: i,j,k,b,d,ijk !< Counter.
+
+   call sb(1)%destroy
+   call sb(2)%destroy
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc)
+   ! search for direction with highest number of cells being compatible with MG level
+   dir = hdirs(Ni=Ni,Nj=Nj,Nk=Nk)
+   dir_found = .false.
+   direction_loop: do d=1, 3
+      select case(dir(d))
+      case(1) ! i direction
+         N = Ni
+      case(2) ! j direction
+         N = Nj
+      case(3) ! k direction
+         N = Nk
+      endselect
+      if (N/2**(mgl)<2) cycle direction_loop ! not enough MG levels
+      dir_found = .true.
+      Ns(1) = (((N)/2**mgl)/2)*(2**mgl) ; Ns(2) = N-Ns(1)
+      exit direction_loop
+   enddo direction_loop
+
+   if (dir_found) then
+      ! assign dimensions and deltas
+      sb%Ni = Ni
+      sb%Nj = Nj
+      sb%Nk = Nk
+      sb%gc = gc
+      delta = 0
+      select case(dir(d))
+      case(1) ! i direction
+         sb(1)%Ni = Ns(1) ; sb(2)%Ni = Ns(2)
+         sb%nadj = gc*(Nj+2*gc)*(Nk+2*gc)
+         delta(1) = 1
+      case(2) ! j direction
+         sb(1)%Nj = Ns(1) ; sb(2)%Nj = Ns(2)
+         sb%nadj = (Ni+2*gc)*gc*(Nk+2*gc)
+         delta(2) = 1
+      case(3) ! k direction
+         sb(1)%Nk = Ns(1) ; sb(2)%Nk = Ns(2)
+         sb%nadj = (Ni+2*gc)*(Nj+2*gc)*gc
+         delta(3) = 1
+      endselect
+      ! alloc split blocks
+      call sb(1)%alloc
+      call sb(2)%alloc
+      ! assign group, body, proc tags
+      sb%group = self%group
+      sb%body  = self%body
+      sb%proc  = self%proc
+      ! assign nodes
+      do k=0-gc, sb(1)%Nk+gc
+      do j=0-gc, sb(1)%Nj+gc
+      do i=0-gc, sb(1)%Ni+gc
+         sb(1)%nodes(:,i,j,k) = self%nodes(:,i,j,k)
+      enddo
+      enddo
+      enddo
+      do k=0-gc, sb(2)%Nk+gc
+      do j=0-gc, sb(2)%Nj+gc
+      do i=0-gc, sb(2)%Ni+gc
+         sb(2)%nodes(:,i,j,k) = self%nodes(:,i+sb(1)%Ni*delta(1),j+sb(1)%Nj*delta(2),k+sb(1)%Nk*delta(3))
+      enddo
+      enddo
+      enddo
+      ! assign icc
+      do k=1-gc, sb(1)%Nk+gc
+      do j=1-gc, sb(1)%Nj+gc
+      do i=1-gc, sb(1)%Ni+gc
+         sb(1)%icc(i,j,k) = self%icc(i,j,k)
+      enddo
+      enddo
+      enddo
+      do k=1-gc, sb(2)%Nk+gc
+      do j=1-gc, sb(2)%Nj+gc
+      do i=1-gc, sb(2)%Ni+gc
+         sb(2)%icc(i,j,k) = self%icc(i+(1+sb(1)%Ni)*delta(1),j+(1+sb(1)%Nj)*delta(2),k+(1+sb(1)%Nk)*delta(3))
+      enddo
+      enddo
+      enddo
+      ! assign absolute block index
+      sb(1)%ab = self%ab     ! first  child substitute parent
+      sb(2)%ab = self%ab + 1 ! second child substitute subsequent block of parent, shift is necessary in global blocks list
+      ! create new adjacent icc along the split direction
+      ijk = 0
+      do k=1-gc, Nk+gc - (Nk+gc)*delta(3)
+      do j=1-gc, Nj+gc - (Nj+gc)*delta(2)
+      do i=1-gc, Ni+gc - (Ni+gc)*delta(1)
+         ijk = ijk + 1
+         sb(1)%icc(i+(sb(1)%Ni+gc)*delta(1),j+(sb(1)%Nj+gc)*delta(2),k+(sb(1)%Nk+gc)*delta(3)) = - ijk
+         sb(2)%icc(i                       ,j                       ,k                       ) = - ijk
+         sb(1)%adj(1:4,ijk) = [sb(2)%ab,i+gc*delta(1)      ,j+gc*delta(2)      ,k+gc*delta(3)      ] ! adjacent indexes, b,i,j,k
+         sb(2)%adj(1:4,ijk) = [sb(1)%ab,i+sb(1)%Ni*delta(1),j+sb(1)%Nj*delta(2),k+sb(1)%Nk*delta(3)] ! adjacent indexes, b,i,j,k
+      enddo
+      enddo
+      enddo
+   endif
+   endassociate
+   contains
+      pure function hdirs(Ni,Nj,Nk)
+      !< Return the list of directions ordered from the one with highest-number of cells to the lowest one.
+      integer(I4P), intent(in) :: Ni,Nj,Nk   !< Number of cells along each direction.
+      integer(I4P)             :: hdirs(1:3) !< list of ordered directions.
+      integer(I4P)             :: maxd,mind  !< Temporary variables.
+
+      maxd = maxloc([Ni,Nj,Nk],dim=1) ; mind = minloc([Ni,Nj,Nk],dim=1) ; hdirs = [maxd,6-maxd-mind,mind]
+      endfunction hdirs
+   endsubroutine split
 
    pure subroutine traslate(self, traslation)
    !< Traslate block nodes by a given traslation vector.
@@ -361,9 +319,9 @@ contains
 
    associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes)
    if (allocated(self%nodes)) then
-      do k=1-self%gc(5),self%Nk+self%gc(6)
-      do j=1-self%gc(3),self%Nj+self%gc(4)
-      do i=1-self%gc(1),self%Ni+self%gc(2)
+      do k=1-self%gc,self%Nk+self%gc
+      do j=1-self%gc,self%Nj+self%gc
+      do i=1-self%gc,self%Ni+self%gc
          self%nodes(1:3,i,j,k) = self%nodes(1:3,i,j,k) + traslation(1:3)
       enddo
       enddo
@@ -387,6 +345,8 @@ integer(I4P)                    :: file_unit_grd        !< Grid unit file.
 integer(I4P)                    :: file_unit_icc        !< Icc unit file.
 integer(I4P)                    :: blocks_number=0      !< Number of blocks contained into the files.
 type(block_object), allocatable :: blocks(:)            !< Blocks contained into the files.
+logical                         :: is_split_done        !< Sentinel to check is split has been done.
+type(block_object)              :: sb(2)                !< Split blocks.
 integer(I4P)                    :: unstruct_dimension=0 !< Dimension of unstructured array of rcc.
 real(R4P), allocatable          :: rcc(:)               !< rcc unstructured array.
 integer(I4P)                    :: na                   !< Number of command line arguments.
@@ -408,9 +368,7 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
    read(file_unit_grd, end=10, err=10) blocks_number
    allocate(blocks(1:blocks_number))
    do b=1, blocks_number
-      call blocks(b)%load_dimensions(file_unit=file_unit_grd,      &
-                                     is_centers_to_allocate=.true.,&
-                                     is_extents_to_allocate=.true.)
+      call blocks(b)%load_dimensions(ab=b, file_unit=file_unit_grd)
    enddo
    do b=1, blocks_number
       call blocks(b)%load_nodes(file_unit=file_unit_grd)
@@ -425,7 +383,7 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
       stop
    endif
    do b=1, blocks_number
-      call blocks(b)%load_dimensions(file_unit=file_unit_icc)
+      call blocks(b)%load_dimensions(ab=b, file_unit=file_unit_icc)
    enddo
    do b=1, blocks_number
       call blocks(b)%load_icc(file_unit=file_unit_icc)
@@ -434,8 +392,31 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
    allocate(rcc(1:unstruct_dimension))
    read(file_unit_icc) (rcc(i),i=1,unstruct_dimension)
    close(file_unit_icc)
+
+   call blocks(2)%split(mgl=2, is_split_done=is_split_done, sb=sb)
+   if (is_split_done) then
+      print *, 'parent block           ',2,blocks(2)%Ni,blocks(2)%Nj,blocks(2)%Nk
+      print *, 'first split block      ',sb(1)%ab,sb(1)%Ni,sb(1)%Nj,sb(1)%Nk
+      print *, 'second split block     ',sb(2)%ab,sb(2)%Ni,sb(2)%Nj,sb(2)%Nk
+      print *, 'first split block adj  ',sb(1)%adj(1:4,1),sb(1)%adj(1:4,2)
+      print *, 'second split block adj ',sb(2)%adj(1:4,1),sb(2)%adj(1:4,2)
+      ! ab shift
+      do b=sb(2)%ab, blocks_number
+         blocks(b)%ab = blocks(b)%ab + 1
+      enddo
+      ! update blocks list
+      if     (sb(1)%ab==1) then ! first block in list has been splitted
+         blocks = [sb,blocks(2:blocks_number)]
+      elseif (sb(1)%ab==blocks_number) then ! last  block in list has been splitted
+         blocks = [blocks(1:blocks_number-1),sb]
+      else
+         blocks = [blocks(1:sb(1)%ab-1),sb,blocks(sb(1)%ab+1:blocks_number)]
+      endif
+      blocks_number = blocks_number + 1
+   endif
+   ! stop
+
    do b=1, blocks_number
-      call blocks(b)%compute_cc(rcc=rcc)
       call blocks(b)%save_block_file(b=b, rcc=rcc)
    enddo
 else

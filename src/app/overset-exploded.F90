@@ -64,9 +64,7 @@ type :: block_object
    integer(I4P)              :: weight=0          !< Block weight.
    real(R8P),    allocatable :: nodes(:,:,:,:)    !< Nodes coordinates.
    integer(I4P), allocatable :: tcc(:,:,:,:)      !< BC type and eventual index on chimera values [1:2,1-gc:ni,1-gc:nj,1-gc:nk].
-   real(R4P),    allocatable :: chimera(:)        !< Chimera values (type,donors number, bijk-weight for each donor) [1:nchimera].
-   integer(I4P), allocatable :: adj(:,:)          !< New adjacent-BC indexes for split blocks [1:4,nadj].
-   integer(I4P)              :: nadj=0            !< Number of new adjacent-BC cells.
+   real(R4P),    allocatable :: chimera(:)        !< Chimera values (donors number, bijk-weight for each donor) [1:nchimera].
    integer(I4P)              :: ab=0              !< Absolute block index.
    integer(I4P)              :: group=0           !< Index of gruop.
    integer(I4P)              :: body=0            !< Index of body.
@@ -76,14 +74,15 @@ type :: block_object
    logical                   :: is_loaded=.false. !< Flag for checking if the block is loaded.
    contains
       ! public methods
-      procedure, pass(self) :: destroy         !< Destroy dynamic memory.
-      procedure, pass(self) :: alloc           !< Allocate dynamic memory.
-      procedure, pass(self) :: load_dimensions !< Load block dimensions from file.
-      procedure, pass(self) :: load_icc        !< Load block icc from file.
-      procedure, pass(self) :: load_nodes      !< Load block nodes from file.
-      procedure, pass(self) :: parse_rcc       !< Parse global rcc and store in local tcc/chimera arrays.
-      procedure, pass(self) :: save_block_file !< Save block data into its own file.
-      procedure, pass(self) :: split           !< Split block.
+      procedure, pass(self) :: destroy          !< Destroy dynamic memory.
+      procedure, pass(self) :: alloc            !< Allocate dynamic memory.
+      procedure, pass(self) :: load_dimensions  !< Load block dimensions from file.
+      procedure, pass(self) :: load_icc         !< Load block icc from file.
+      procedure, pass(self) :: load_nodes       !< Load block nodes from file.
+      procedure, pass(self) :: parse_rcc        !< Parse global rcc and store in local tcc/chimera arrays.
+      procedure, pass(self) :: save_block_file  !< Save block data into its own file.
+      procedure, pass(self) :: shift_ab_chimera !< Shift absolute block index in chimera data.
+      procedure, pass(self) :: split            !< Split block.
 endtype block_object
 
 contains
@@ -101,7 +100,6 @@ contains
    if (allocated(self%tcc)) deallocate(self%tcc)
    if (allocated(self%chimera)) deallocate(self%chimera)
    if (allocated(self%adj)) deallocate(self%adj)
-   self%nadj  = 0
    self%ab    = 0
    self%group = 0
    self%body  = 0
@@ -117,7 +115,6 @@ contains
    allocate(self%nodes(1:3,0-gc:Ni+gc,0-gc:Nj+gc,0-gc:Nk+gc))
    allocate(self%icc(1-gc:Ni+gc,1-gc:Nj+gc,1-gc:Nk+gc))
    allocate(self%tcc(1:2,1-gc:Ni+gc,1-gc:Nj+gc,1-gc:Nk+gc))
-   if (self%nadj>0) allocate(self%adj(1:4,self%nadj))
    endassociate
    endsubroutine alloc
 
@@ -306,6 +303,32 @@ contains
    endassociate
    endsubroutine save_block_file
 
+   pure subroutine shift_ab_chimera(self, ab_old, ab_new)
+   !< Shift absolute block index in chimera data.
+   !< All occurences of ab_old in chimera data are shifted to ab_new.
+   class(block_object), intent(inout)        :: self        !< Block data.
+   integer(I4P),        intent(in)           :: ab_old      !< Old absolute block index.
+   integer(I4P),        intent(in)           :: ab_new      !< New absolute block index.
+   integer(I4P)                              :: i,j,k,n,o,p !< Counter.
+
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes,tcc=>self%tcc,chimera=>self%chimera)
+   do k=1-gc, Nk+gc
+   do j=1-gc, Nj+gc
+   do i=1-gc, Ni+gc
+      select case(tcc(1,i,j,k))
+      case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         p = tcc(2,i,j,k)
+         do n=1, nint(chimera(p),I4P) ! b,i,j,k,weight for each donor
+            o = p + 5*(n-1)
+            if (nint(chimera(o+1))==ab_old) chimera(o+1) = real(ab_new,R4P)
+         enddo
+      endselect
+   enddo
+   enddo
+   enddo
+   endassociate
+   endsubroutine shift_ab_chimera
+
    pure subroutine split(self, mgl, is_split_done, sb)
    !< Split block. Split current block (if possible), along a the largest direction, in half: the first
    !< Block substitute current block, the other is added to blocks list.
@@ -318,6 +341,7 @@ contains
    integer(I4P)                     :: Ns(2)         !< Cells numbers in the two split blocks.
    logical                          :: dir_found     !< Sentil to check direction found.
    integer(I4P)                     :: delta(3)      !< Directions deltas.
+   integer(I4P)                     :: nadj          !< Number of new adjacent-BC cells.
    integer(I4P)                     :: i,j,k,b,d,ijk !< Counter.
 
    call sb(1)%destroy
@@ -351,15 +375,15 @@ contains
       select case(dir(d))
       case(1) ! i direction
          sb(1)%Ni = Ns(1) ; sb(2)%Ni = Ns(2)
-         sb%nadj = gc*(Nj+2*gc)*(Nk+2*gc)
+         nadj = gc*(Nj+2*gc)*(Nk+2*gc)
          delta(1) = 1
       case(2) ! j direction
          sb(1)%Nj = Ns(1) ; sb(2)%Nj = Ns(2)
-         sb%nadj = (Ni+2*gc)*gc*(Nk+2*gc)
+         nadj = (Ni+2*gc)*gc*(Nk+2*gc)
          delta(2) = 1
       case(3) ! k direction
          sb(1)%Nk = Ns(1) ; sb(2)%Nk = Ns(2)
-         sb%nadj = (Ni+2*gc)*(Nj+2*gc)*gc
+         nadj = (Ni+2*gc)*(Nj+2*gc)*gc
          delta(3) = 1
       endselect
       ! alloc split blocks

@@ -61,28 +61,32 @@ type :: block_object
    integer(I4P)              :: Nj=0              !< Number of cells in j direction.
    integer(I4P)              :: Nk=0              !< Number of cells in k direction.
    integer(I4P)              :: gc=2              !< Number of ghost cells.
-   integer(I4P)              :: weight=0          !< Block weight.
+   integer(I4P)              :: w=0               !< Block weight (work load).
    real(R8P),    allocatable :: nodes(:,:,:,:)    !< Nodes coordinates.
+   integer(I4P), allocatable :: icc(:,:,:)        !< Cell centered icc values.
    integer(I4P), allocatable :: tcc(:,:,:,:)      !< BC type and eventual index on chimera values [1:2,1-gc:ni,1-gc:nj,1-gc:nk].
    real(R4P),    allocatable :: chimera(:)        !< Chimera values (donors number, bijk-weight for each donor) [1:nchimera].
    integer(I4P)              :: ab=0              !< Absolute block index.
    integer(I4P)              :: group=0           !< Index of gruop.
    integer(I4P)              :: body=0            !< Index of body.
    integer(I4P)              :: proc=0            !< Processor assigned to.
-   ! old icc structure
-   integer(I4P), allocatable :: icc(:,:,:)        !< Cell centered icc values.
    logical                   :: is_loaded=.false. !< Flag for checking if the block is loaded.
+   ! splitting data
+   integer(I4P), allocatable :: parents(:)        !< List of parents blocks.
+   integer(I4P)              :: split_level=0     !< Split level, 0 for original block.
+   integer(I4P)              :: split_dir=0       !< Split direction, if = 0 no split.
    contains
       ! public methods
-      procedure, pass(self) :: destroy          !< Destroy dynamic memory.
-      procedure, pass(self) :: alloc            !< Allocate dynamic memory.
-      procedure, pass(self) :: load_dimensions  !< Load block dimensions from file.
-      procedure, pass(self) :: load_icc         !< Load block icc from file.
-      procedure, pass(self) :: load_nodes       !< Load block nodes from file.
-      procedure, pass(self) :: parse_rcc        !< Parse global rcc and store in local tcc/chimera arrays.
-      procedure, pass(self) :: save_block_file  !< Save block data into its own file.
-      procedure, pass(self) :: shift_ab_chimera !< Shift absolute block index in chimera data.
-      procedure, pass(self) :: split            !< Split block.
+      procedure, pass(self) :: destroy            !< Destroy dynamic memory.
+      procedure, pass(self) :: alloc              !< Allocate dynamic memory.
+      procedure, pass(self) :: load_dimensions    !< Load block dimensions from file.
+      procedure, pass(self) :: load_icc           !< Load block icc from file.
+      procedure, pass(self) :: load_nodes         !< Load block nodes from file.
+      procedure, pass(self) :: parse_rcc          !< Parse global rcc and store in local tcc/chimera arrays.
+      procedure, pass(self) :: sanitize_chimera   !< Sanitize chimera data after a split.
+      procedure, pass(self) :: save_block_file    !< Save block data into its own file.
+      procedure, pass(self) :: split              !< Split block.
+      procedure, pass(self) :: weight             !< Return block weight (work load).
 endtype block_object
 
 contains
@@ -90,16 +94,15 @@ contains
    !< Destroy dynamic memory.
    class(block_object), intent(inout) :: self !< Block data.
 
-   self%Ni     = 0
-   self%Nj     = 0
-   self%Nk     = 0
-   self%gc     = 2
-   self%weight = 0
+   self%Ni = 0
+   self%Nj = 0
+   self%Nk = 0
+   self%gc = 2
+   self%w  = 0
    if (allocated(self%nodes)) deallocate(self%nodes)
    if (allocated(self%icc)) deallocate(self%icc)
    if (allocated(self%tcc)) deallocate(self%tcc)
    if (allocated(self%chimera)) deallocate(self%chimera)
-   if (allocated(self%adj)) deallocate(self%adj)
    self%ab    = 0
    self%group = 0
    self%body  = 0
@@ -134,7 +137,7 @@ contains
    if (present(ab)) then
       call self%alloc
       self%ab = ab
-      self%weight = self%Ni*self%Nj*self%Nk
+      self%w = self%weight()
    endif
    endsubroutine load_dimensions
 
@@ -185,12 +188,20 @@ contains
       if (p>0) then
          self%tcc(1,i,j,k) = int(rcc(p),I4P)
          select case(int(rcc(p),I4P))
+         case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
+            ! no additional data is necessary
+         case(BC_ACTIVE_CELL)
+            ! no additional data is necessary
          case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
             ! for chimera BC it is necessary to store other data
             nchimera = nchimera + 1
             self%tcc(2,i,j,k) = nchimera
             ndonors = nint(rcc(p+1),I4P)    ! donors number
             nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
+         case(BC_EDGE)
+            ! no additional data is necessary
+         case default
+            ! print *, 'error: unknown tcc "',self%tcc(1,i,j,k),'", ab,i,j,k=',self%ab,i,j,k
          endselect
       endif
    enddo
@@ -224,6 +235,62 @@ contains
    endif
    endassociate
    endsubroutine parse_rcc
+
+   pure subroutine sanitize_chimera(self, sb)
+   !< Sanitize chimera data after a split.
+   class(block_object), intent(inout) :: self        !< Block data.
+   type(block_object),  intent(in)    :: sb(2)       !< Split blocks.
+   integer(I4P)                       :: i,j,k,p,n   !< Counter.
+   integer(I4P)                       :: db,di,dj,dk !< Donor indexes.
+   integer(I4P)                       :: ndonors     !< Chimera donors number.
+   integer(I4P)                       :: o           !< Offset of rcc.
+
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes,icc=>self%icc,tcc=>self%tcc,chimera=>self%chimera)
+   do k=1-gc, Nk+gc
+   do j=1-gc, Nj+gc
+   do i=1-gc, Ni+gc
+      select case(tcc(1,i,j,k))
+      case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         p = tcc(2,i,j,k)
+         ndonors = nint(chimera(p),I4P)
+         do n=1, ndonors
+            o = p + 5*(n-1)
+            db = nint(chimera(o+1),I4P) ! donor block
+            if (db==sb(1)%ab) then
+               ! self block has a chimera reference with a splitted block that must be sanitized, if fall in sb(2)
+               di = nint(chimera(o+2),I4P) ; dj = nint(chimera(o+3),I4P) ; dk = nint(chimera(o+4),I4P)
+               ! check if reference fall in sb(2) domain
+               select case(sb(1)%split_dir)
+               case(1)
+                  if (di>sb(1)%Ni) then
+                     chimera(o+1) = real(db+1,R4P)        ! point to sb(2)%ab = sb(1)%ab+1 = db + 1
+                     chimera(o+2) = real(di-sb(1)%Ni,R4P) ! point to sb(2)%i, other 2 indexes are the same
+                  endif
+               case(2)
+                  if (dj>sb(1)%Nj) then
+                     chimera(o+1) = real(db+1,R4P)        ! point to sb(2)%ab = sb(1)%ab+1 = db + 1
+                     chimera(o+3) = real(dj-sb(1)%Nj,R4P) ! point to sb(2)%j, other 2 indexes are the same
+                  endif
+               case(3)
+                  if (dk>sb(1)%Nk) then
+                     chimera(o+1) = real(db+1,R4P)        ! point to sb(2)%ab = sb(1)%ab+1 = db + 1
+                     chimera(o+4) = real(dk-sb(1)%Nk,R4P) ! point to sb(2)%k, other 2 indexes are the same
+                  endif
+               endselect
+            elseif (db>sb(1)%ab) then
+               ! self block has a chimera reference with a block subsequent to split block, ab must be shifted
+               chimera(o+1) = real(db+1,R4P)
+               ! other chimera indexes are the same
+            else
+               ! for chimera references to block previous to split block sanitize is not necessary
+            endif
+         enddo
+      endselect
+   enddo
+   enddo
+   enddo
+   endassociate
+   endsubroutine sanitize_chimera
 
    subroutine save_block_file(self, b, rcc, tec)
    !< Save block data into its own file.
@@ -269,7 +336,7 @@ contains
       case(BC_EDGE)
          write(file_unit) i,j,k,bc_string(tcc(1,i,j,k))
       case default
-         print *, 'error: unknown icc "',int(rcc(p),I4P),'", b,i,j,k=',b,i,j,k
+         print *, 'error: unknown tcc "',tcc(1,i,j,k),'", b,i,j,k=',b,i,j,k
          stop
       endselect
    enddo
@@ -280,54 +347,61 @@ contains
       ! save block in tecplot format
       open(newunit=file_unit, file='block-'//trim(adjustl(bstr))//'.dat', action='write', status='replace')
       write(file_unit,*) 'TITLE = "Block '//trim(adjustl(bstr))//'"'
-      write(file_unit,*) 'VARIABLES = "X", "Y", "Z", "tcc" "rcc"'
+      write(file_unit,*) 'VARIABLES = "X", "Y", "Z", "tcc" "b" "i" "j" "k"'
       write(file_unit,*) 'ZONE I=', ni+1+2*gc, ', J=', nj+1+2*gc, ', K=', nk+1+2*gc, &
-                         ', DATAPACKING=BLOCK, VARLOCATION=([4,5]=CELLCENTERED)'
+                         ', DATAPACKING=BLOCK, VARLOCATION=([4,5,6,7,8]=CELLCENTERED)'
       do k=0-gc, Nk+gc ; do j=0-gc, Nj+gc ; do i=0-gc, Ni+gc ; write(file_unit,'(E23.15)') nodes(1,i,j,k) ; enddo ; enddo ; enddo
       do k=0-gc, Nk+gc ; do j=0-gc, Nj+gc ; do i=0-gc, Ni+gc ; write(file_unit,'(E23.15)') nodes(2,i,j,k) ; enddo ; enddo ; enddo
       do k=0-gc, Nk+gc ; do j=0-gc, Nj+gc ; do i=0-gc, Ni+gc ; write(file_unit,'(E23.15)') nodes(3,i,j,k) ; enddo ; enddo ; enddo
 
+      ! tcc
       do k=1-gc, Nk+gc ; do j=1-gc, Nj+gc ; do i=1-gc, Ni+gc
          write(file_unit,'(E23.15)') real(tcc(1,i,j,k),R8P)
       enddo ; enddo ; enddo
+      ! b
       do k=1-gc, Nk+gc ; do j=1-gc, Nj+gc ; do i=1-gc, Ni+gc
-         p = icc(i,j,k)
-         if (p>0) then
-            write(file_unit,'(E23.15)') real(rcc(p),R8P)
-         else
-            write(file_unit,'(E23.15)') real(icc(i,j,k),R8P)
-         endif
+         select case(tcc(1,i,j,k))
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            p = tcc(2,i,j,k)
+            write(file_unit,'(E23.15)') real(chimera(p+1),R8P)
+         case default
+            write(file_unit,'(E23.15)') -33._R8P
+         endselect
+      enddo ; enddo ; enddo
+      ! i
+      do k=1-gc, Nk+gc ; do j=1-gc, Nj+gc ; do i=1-gc, Ni+gc
+         select case(tcc(1,i,j,k))
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            p = tcc(2,i,j,k)
+            write(file_unit,'(E23.15)') real(chimera(p+2),R8P)
+         case default
+            write(file_unit,'(E23.15)') -33._R8P
+         endselect
+      enddo ; enddo ; enddo
+      ! j
+      do k=1-gc, Nk+gc ; do j=1-gc, Nj+gc ; do i=1-gc, Ni+gc
+         select case(tcc(1,i,j,k))
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            p = tcc(2,i,j,k)
+            write(file_unit,'(E23.15)') real(chimera(p+3),R8P)
+         case default
+            write(file_unit,'(E23.15)') -33._R8P
+         endselect
+      enddo ; enddo ; enddo
+      ! k
+      do k=1-gc, Nk+gc ; do j=1-gc, Nj+gc ; do i=1-gc, Ni+gc
+         select case(tcc(1,i,j,k))
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            p = tcc(2,i,j,k)
+            write(file_unit,'(E23.15)') real(chimera(p+4),R8P)
+         case default
+            write(file_unit,'(E23.15)') -33._R8P
+         endselect
       enddo ; enddo ; enddo
       close(file_unit)
    endif
    endassociate
    endsubroutine save_block_file
-
-   pure subroutine shift_ab_chimera(self, ab_old, ab_new)
-   !< Shift absolute block index in chimera data.
-   !< All occurences of ab_old in chimera data are shifted to ab_new.
-   class(block_object), intent(inout)        :: self        !< Block data.
-   integer(I4P),        intent(in)           :: ab_old      !< Old absolute block index.
-   integer(I4P),        intent(in)           :: ab_new      !< New absolute block index.
-   integer(I4P)                              :: i,j,k,n,o,p !< Counter.
-
-   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes,tcc=>self%tcc,chimera=>self%chimera)
-   do k=1-gc, Nk+gc
-   do j=1-gc, Nj+gc
-   do i=1-gc, Ni+gc
-      select case(tcc(1,i,j,k))
-      case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
-         p = tcc(2,i,j,k)
-         do n=1, nint(chimera(p),I4P) ! b,i,j,k,weight for each donor
-            o = p + 5*(n-1)
-            if (nint(chimera(o+1))==ab_old) chimera(o+1) = real(ab_new,R4P)
-         enddo
-      endselect
-   enddo
-   enddo
-   enddo
-   endassociate
-   endsubroutine shift_ab_chimera
 
    pure subroutine split(self, mgl, is_split_done, sb)
    !< Split block. Split current block (if possible), along a the largest direction, in half: the first
@@ -336,121 +410,246 @@ contains
    integer(I4P),        intent(in)  :: mgl           !< Number of levels of multi-grid to be preserved.
    logical,             intent(out) :: is_split_done !< Sentinel to check is split has been done.
    type(block_object),  intent(out) :: sb(2)         !< Split blocks.
-   integer(I4P)                     :: dir(1:3)      !< Ordered directions list.
-   integer(I4P)                     :: N             !< Current direction cells number.
-   integer(I4P)                     :: Ns(2)         !< Cells numbers in the two split blocks.
-   logical                          :: dir_found     !< Sentil to check direction found.
-   integer(I4P)                     :: delta(3)      !< Directions deltas.
    integer(I4P)                     :: nadj          !< Number of new adjacent-BC cells.
-   integer(I4P)                     :: i,j,k,b,d,ijk !< Counter.
+   integer(I4P)                     :: delta(3)      !< Directions deltas.
 
+   is_split_done = .false.
    call sb(1)%destroy
    call sb(2)%destroy
-   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc)
-   ! search for direction with highest number of cells being compatible with MG level
-   dir = hdirs(Ni=Ni,Nj=Nj,Nk=Nk)
-   dir_found = .false.
-   direction_loop: do d=1, 3
-      select case(dir(d))
-      case(1) ! i direction
-         N = Ni
-      case(2) ! j direction
-         N = Nj
-      case(3) ! k direction
-         N = Nk
-      endselect
-      if (N/2**(mgl)<2) cycle direction_loop ! not enough MG levels
-      dir_found = .true.
-      Ns(1) = (((N)/2**mgl)/2)*(2**mgl) ; Ns(2) = N-Ns(1)
-      exit direction_loop
-   enddo direction_loop
-
-   if (dir_found) then
-      ! assign dimensions and deltas
-      sb%Ni = Ni
-      sb%Nj = Nj
-      sb%Nk = Nk
-      sb%gc = gc
-      delta = 0
-      select case(dir(d))
-      case(1) ! i direction
-         sb(1)%Ni = Ns(1) ; sb(2)%Ni = Ns(2)
-         nadj = gc*(Nj+2*gc)*(Nk+2*gc)
-         delta(1) = 1
-      case(2) ! j direction
-         sb(1)%Nj = Ns(1) ; sb(2)%Nj = Ns(2)
-         nadj = (Ni+2*gc)*gc*(Nk+2*gc)
-         delta(2) = 1
-      case(3) ! k direction
-         sb(1)%Nk = Ns(1) ; sb(2)%Nk = Ns(2)
-         nadj = (Ni+2*gc)*(Nj+2*gc)*gc
-         delta(3) = 1
-      endselect
+   call find_split(Ni=self%Ni,Nj=self%Nj,Nk=self%Nk,gc=self%gc,mgl=mgl,nadj=nadj,delta=delta,sb=sb)
+   if (sb(1)%split_dir>0) then
       ! alloc split blocks
       call sb(1)%alloc
       call sb(2)%alloc
+      sb(1)%w = sb(1)%weight()
+      sb(2)%w = sb(2)%weight()
       ! assign group, body, proc tags
       sb%group = self%group
       sb%body  = self%body
       sb%proc  = self%proc
-      ! assign nodes
-      do k=0-gc, sb(1)%Nk+gc
-      do j=0-gc, sb(1)%Nj+gc
-      do i=0-gc, sb(1)%Ni+gc
-         sb(1)%nodes(:,i,j,k) = self%nodes(:,i,j,k)
-      enddo
-      enddo
-      enddo
-      do k=0-gc, sb(2)%Nk+gc
-      do j=0-gc, sb(2)%Nj+gc
-      do i=0-gc, sb(2)%Ni+gc
-         sb(2)%nodes(:,i,j,k) = self%nodes(:,i+sb(1)%Ni*delta(1),j+sb(1)%Nj*delta(2),k+sb(1)%Nk*delta(3))
-      enddo
-      enddo
-      enddo
-      ! assign icc
-      do k=1-gc, sb(1)%Nk+gc
-      do j=1-gc, sb(1)%Nj+gc
-      do i=1-gc, sb(1)%Ni+gc
-         sb(1)%icc(i,j,k) = self%icc(i,j,k)
-      enddo
-      enddo
-      enddo
-      do k=1-gc, sb(2)%Nk+gc
-      do j=1-gc, sb(2)%Nj+gc
-      do i=1-gc, sb(2)%Ni+gc
-         sb(2)%icc(i,j,k) = self%icc(i+(1+sb(1)%Ni)*delta(1),j+(1+sb(1)%Nj)*delta(2),k+(1+sb(1)%Nk)*delta(3))
-      enddo
-      enddo
-      enddo
       ! assign absolute block index
       sb(1)%ab = self%ab     ! first  child substitute parent
       sb(2)%ab = self%ab + 1 ! second child substitute subsequent block of parent, shift is necessary in global blocks list
-      ! create new adjacent icc along the split direction
-      ijk = 0
+      ! update split history
+      sb(1)%split_level = self%split_level + 1
+      sb(2)%split_level = self%split_level + 1
+      if (allocated(self%parents)) then
+         sb(1)%parents = [self%parents,self%ab]
+         sb(2)%parents = [self%parents,self%ab]
+      else
+         sb(1)%parents = [             self%ab]
+         sb(2)%parents = [             self%ab]
+      endif
+      ! split data
+      call split_nodes(nodes=self%nodes,delta=delta,gc=self%gc,sb=sb)
+      call split_tcc(tcc=self%tcc,delta=delta,gc=self%gc,sb=sb)
+      call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=1,ab_ob=sb(2)%ab,bs=sb(1))
+      call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=2,ab_ob=sb(1)%ab,bs=sb(2))
+      is_split_done = .true.
+   endif
+   contains
+      pure subroutine find_split(Ni,Nj,Nk,gc,mgl,nadj,delta,sb)
+      !< Find split related data, direction, cells numbers, etc.
+      integer(I4P),       intent(in)    :: Ni,Nj,Nk,gc !< Block dimensions.
+      integer(I4P),       intent(in)    :: mgl         !< Number of levels of multi-grid to be preserved.
+      integer(I4P),       intent(inout) :: nadj        !< Number of new adjacent-BC cells.
+      integer(I4P),       intent(inout) :: delta(3)    !< Directions deltas.
+      type(block_object), intent(inout) :: sb(2)       !< Split blocks.
+      integer(I4P)                      :: maxd,mind   !< Temporary variables.
+      integer(I4P)                      :: dir(1:3)    !< Ordered directions list.
+      integer(I4P)                      :: N           !< Current direction cells number.
+      integer(I4P)                      :: Ns(2)       !< Cells numbers in the two split blocks.
+      logical                           :: dir_found   !< Sentil to check direction found.
+      integer(I4P)                      :: d           !< Counter.
+
+      sb%split_dir = 0
+      ! search for direction with highest number of cells being compatible with MG level
+      maxd = maxloc([Ni,Nj,Nk],dim=1) ; mind = minloc([Ni,Nj,Nk],dim=1) ; dir = [maxd,6-maxd-mind,mind]
+      dir_found = .false.
+      direction_loop: do d=1, 3
+         select case(dir(d))
+         case(1) ! i direction
+            N = Ni
+         case(2) ! j direction
+            N = Nj
+         case(3) ! k direction
+            N = Nk
+         endselect
+         if (N/2**(mgl)<2) cycle direction_loop ! not enough MG levels
+         dir_found = .true.
+         sb%split_dir = dir(d)
+         Ns(1) = (((N)/2**mgl)/2)*(2**mgl) ; Ns(2) = N-Ns(1)
+         exit direction_loop
+      enddo direction_loop
+
+      if (dir_found) then
+         ! assign dimensions and deltas
+         sb%Ni = Ni
+         sb%Nj = Nj
+         sb%Nk = Nk
+         sb%gc = gc
+         delta = 0
+         select case(sb(1)%split_dir)
+         case(1) ! i direction
+            sb(1)%Ni = Ns(1) ; sb(2)%Ni = Ns(2)
+            nadj = gc*(Nj+2*gc)*(Nk+2*gc)
+            delta(1) = 1
+         case(2) ! j direction
+            sb(1)%Nj = Ns(1) ; sb(2)%Nj = Ns(2)
+            nadj = (Ni+2*gc)*gc*(Nk+2*gc)
+            delta(2) = 1
+         case(3) ! k direction
+            sb(1)%Nk = Ns(1) ; sb(2)%Nk = Ns(2)
+            nadj = (Ni+2*gc)*(Nj+2*gc)*gc
+            delta(3) = 1
+         endselect
+      endif
+      endsubroutine find_split
+
+      pure subroutine split_chimera(chimera,delta,nadj,sb_n,ab_ob,bs)
+      real(R4P),          intent(in)    :: chimera(:)    !< Parent chimera data.
+      integer(I4P),       intent(in)    :: delta(3)      !< Deltas.
+      integer(I4P),       intent(in)    :: nadj          !< Number of new adjacent-BC cells.
+      integer(I4P),       intent(in)    :: sb_n          !< Current split block number, 1 or 2.
+      integer(I4P),       intent(in)    :: ab_ob         !< Absolute block index of other split block.
+      type(block_object), intent(inout) :: bs            !< Split block.
+      integer(I4P)                      :: nchimera      !< Number of chimera data for split block.
+      integer(I4P)                      :: n,o,p,ndonors !< Counter.
+      integer(I4P)                      :: i,j,k         !< Counter.
+      ! local parameters
+      integer(I4P), parameter :: BC_ADJ0(3)=[BC_CHIMERA_FACE_ADJ_I0,&
+                                             BC_CHIMERA_FACE_ADJ_J0,&
+                                             BC_CHIMERA_FACE_ADJ_K0]          !< List of BC for new adj of sb(2).
+      integer(I4P), parameter :: BC_ADJN(3)=[BC_CHIMERA_FACE_ADJ_IN,&
+                                             BC_CHIMERA_FACE_ADJ_JN,&
+                                             BC_CHIMERA_FACE_ADJ_KN]          !< List of BC for new adj of sb(1).
+      integer(I4P), parameter :: BC_ADJ(3,2)=reshape([BC_ADJN,BC_ADJ0],[3,2]) !< List of BC for new adj.
+
+      associate(Ni=>bs%Ni,Nj=>bs%Nj,Nk=>bs%Nk,gc=>bs%gc)
+      ! count chimera data of parent
+      nchimera = 0
+      do k=1-gc, Nk+gc
+      do j=1-gc, Nj+gc
+      do i=1-gc, Ni+gc
+         select case(bs%tcc(1,i,j,k))
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            p = bs%tcc(2,i,j,k)
+            ndonors = nint(chimera(p))
+            nchimera = nchimera + 1 + ndonors*5 ! b,i,j,k,weight for each donor
+         endselect
+      enddo
+      enddo
+      enddo
+      allocate(bs%chimera(nchimera+nadj*6)) ! chimera data from self + new adjacent chimera data (1 donor)
+      ! assign old chimera data
+      nchimera = 0
+      do k=1-gc, Nk+gc
+      do j=1-gc, Nj+gc
+      do i=1-gc, Ni+gc
+         select case(bs%tcc(1,i,j,k))
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            nchimera = nchimera + 1
+            p = bs%tcc(2,i,j,k)               ! point to parent chimera array
+            bs%tcc(2,i,j,k) = nchimera        ! point to new split block chimera array
+            bs%chimera(nchimera) = chimera(p) ! assigno donors number
+            do n=1, nint(chimera(p),I4P) ! b,i,j,k,weight for each donor
+               o = p + 5*(n-1)
+               if (nint(chimera(o+1),R4P)>bs%ab+(1-sb_n)) then
+                  ! reference to a block subsequent to the splitted one, ab index must be shifted
+                  bs%chimera(nchimera+1) = chimera(o+1) + 1
+               else
+                  bs%chimera(nchimera+1) = chimera(o+1)
+               endif
+               bs%chimera(nchimera+2) = chimera(o+2)
+               bs%chimera(nchimera+3) = chimera(o+3)
+               bs%chimera(nchimera+4) = chimera(o+4)
+               bs%chimera(nchimera+5) = chimera(o+5)
+            enddo
+            nchimera = nchimera + 5
+         endselect
+      enddo
+      enddo
+      enddo
+      ! assign new chimera-adjacent data
       do k=1-gc, Nk+gc - (Nk+gc)*delta(3)
       do j=1-gc, Nj+gc - (Nj+gc)*delta(2)
       do i=1-gc, Ni+gc - (Ni+gc)*delta(1)
-         ijk = ijk + 1
-         sb(1)%icc(i+(sb(1)%Ni+gc)*delta(1),j+(sb(1)%Nj+gc)*delta(2),k+(sb(1)%Nk+gc)*delta(3)) = - ijk
-         sb(2)%icc(i                       ,j                       ,k                       ) = - ijk
-         sb(1)%adj(1:4,ijk) = [sb(2)%ab,i+gc*delta(1)      ,j+gc*delta(2)      ,k+gc*delta(3)      ] ! adjacent indexes, b,i,j,k
-         sb(2)%adj(1:4,ijk) = [sb(1)%ab,i+sb(1)%Ni*delta(1),j+sb(1)%Nj*delta(2),k+sb(1)%Nk*delta(3)] ! adjacent indexes, b,i,j,k
+         nchimera = nchimera + 1
+         bs%tcc(1,i+(Ni+gc)*delta(1)*(2-sb_n),j+(Nj+gc)*delta(2)*(2-sb_n),k+(Nk+gc)*delta(3)*(2-sb_n)) = BC_ADJ(bs%split_dir,sb_n)
+         bs%tcc(2,i+(Ni+gc)*delta(1)*(2-sb_n),j+(Nj+gc)*delta(2)*(2-sb_n),k+(Nk+gc)*delta(3)*(2-sb_n)) = nchimera
+         bs%chimera(nchimera  ) = 1._R4P
+         bs%chimera(nchimera+1) = real(ab_ob        ,R4P)
+         bs%chimera(nchimera+2) = real(i+gc*delta(1),R4P)
+         bs%chimera(nchimera+3) = real(j+gc*delta(2),R4P)
+         bs%chimera(nchimera+4) = real(k+gc*delta(3),R4P)
+         bs%chimera(nchimera+5) = 1._R4P
+         nchimera = nchimera + 5
       enddo
       enddo
       enddo
-   endif
-   endassociate
-   contains
-      pure function hdirs(Ni,Nj,Nk)
-      !< Return the list of directions ordered from the one with highest-number of cells to the lowest one.
-      integer(I4P), intent(in) :: Ni,Nj,Nk   !< Number of cells along each direction.
-      integer(I4P)             :: hdirs(1:3) !< list of ordered directions.
-      integer(I4P)             :: maxd,mind  !< Temporary variables.
+      endassociate
+      endsubroutine split_chimera
 
-      maxd = maxloc([Ni,Nj,Nk],dim=1) ; mind = minloc([Ni,Nj,Nk],dim=1) ; hdirs = [maxd,6-maxd-mind,mind]
-      endfunction hdirs
+      pure subroutine split_nodes(nodes,delta,gc,sb)
+      !< Split nodes.
+      integer(I4P),       intent(in)    :: delta(3)                    !< Deltas.
+      integer(I4P),       intent(in)    :: gc                          !< Number of ghost cells.
+      real(R8P),          intent(in)    :: nodes(1:,0-gc:,0-gc:,0-gc:) !< Nodes coordinates.
+      type(block_object), intent(inout) :: sb(2)                       !< Split blocks.
+      integer(I4P)                      :: i,j,k                       !< Counter.
+
+      sb(1)%nodes = 0._R8P
+      do k=0-gc, sb(1)%Nk+gc
+      do j=0-gc, sb(1)%Nj+gc
+      do i=0-gc, sb(1)%Ni+gc
+         sb(1)%nodes(:,i,j,k) = nodes(:,i,j,k)
+      enddo
+      enddo
+      enddo
+      sb(2)%nodes = 0._R8P
+      do k=0-gc, sb(2)%Nk+gc
+      do j=0-gc, sb(2)%Nj+gc
+      do i=0-gc, sb(2)%Ni+gc
+         sb(2)%nodes(:,i,j,k) = nodes(:,i+sb(1)%Ni*delta(1),j+sb(1)%Nj*delta(2),k+sb(1)%Nk*delta(3))
+      enddo
+      enddo
+      enddo
+      endsubroutine split_nodes
+
+      pure subroutine split_tcc(tcc,delta,gc,sb)
+      !< Split tcc.
+      integer(I4P),       intent(in)    :: delta(3)                  !< Deltas.
+      integer(I4P),       intent(in)    :: gc                        !< Number of ghost cells.
+      integer(I4P),       intent(in)    :: tcc(1:,1-gc:,1-gc:,1-gc:) !< Parent tcc data.
+      type(block_object), intent(inout) :: sb(2)                     !< Split blocks.
+      integer(I4P)                      :: i,j,k                     !< Counter.
+
+      sb(1)%tcc = 0
+      do k=1-gc, sb(1)%Nk+gc
+      do j=1-gc, sb(1)%Nj+gc
+      do i=1-gc, sb(1)%Ni+gc
+         sb(1)%tcc(:,i,j,k) = tcc(:,i,j,k)
+      enddo
+      enddo
+      enddo
+      sb(2)%tcc = 0
+      do k=1-gc, sb(2)%Nk+gc
+      do j=1-gc, sb(2)%Nj+gc
+      do i=1-gc, sb(2)%Ni+gc
+         sb(2)%tcc(:,i,j,k) = tcc(:,i+(1+sb(1)%Ni)*delta(1),j+(1+sb(1)%Nj)*delta(2),k+(1+sb(1)%Nk)*delta(3))
+      enddo
+      enddo
+      enddo
+      endsubroutine split_tcc
    endsubroutine split
+
+   elemental function weight(self)
+   !< Return block weight (work load).
+   class(block_object), intent(in) :: self !< Block data.
+   integer(I4P)                    :: weight !< Block weight (work load).
+
+   weight = self%Ni*self%Nj*self%Nk
+   endfunction weight
 
    ! non TBP
    pure function bc_int_type(bc_string)
@@ -546,32 +745,58 @@ contains
    endfunction bc_string
 endmodule oe_block_object
 
+module oe_process_object
+!< Overset-Exploded, definition of class process_object.
+
+use, intrinsic :: iso_fortran_env, only : R4P=>real32, R8P=>real64, I4P=>int32
+
+implicit none
+
+private
+public :: process_object
+
+type :: process_object
+   !< Class process object.
+   integer(I4P)              :: id = 0      !< Process ID.
+   integer(I4P), allocatable :: blocks(:)   !< List of assigned blocks.
+   integer(I4P)              :: w = 0       !< Process workload.
+   integer(I4P)              :: unbalance=0 !< Unbalance respect ideal workload.
+endtype process_object
+endmodule oe_process_object
+
 program overset_exploded
 !< Overset-Exploded program, convert overset output files into exploded per-block files.
 
 use, intrinsic :: iso_fortran_env, only : R4P=>real32, R8P=>real64, I4P=>int32, stderr=>error_unit
 use oe_block_object
+use oe_process_object
 
 implicit none
 
-character(len=99)               :: ca_buffer            !< Command argument buffer.
-character(len=99)               :: file_name_grd        !< Grid file name.
-character(len=99)               :: file_name_icc        !< Icc file name.
-integer(I4P)                    :: file_unit_grd        !< Grid unit file.
-integer(I4P)                    :: file_unit_icc        !< Icc unit file.
-integer(I4P)                    :: blocks_number=0      !< Number of blocks contained into the files.
-type(block_object), allocatable :: blocks(:)            !< Blocks contained into the files.
-logical                         :: is_split_done        !< Sentinel to check is split has been done.
-type(block_object)              :: sb(2)                !< Split blocks.
-integer(I4P)                    :: unstruct_dimension   !< Dimension of unstructured array of rcc.
-integer(I4P)                    :: procs_number         !< Number of processes for load balancing.
-integer(I4P)                    :: total_blocks_weight  !< Total blocks weight.
-integer(I4P)                    :: ideal_block_weight   !< Ideal block weight for load balancing.
-integer(I4P)                    :: nblocks_proc         !< Ideal number of blocks per process.
-real(R4P), allocatable          :: rcc(:)               !< rcc unstructured array.
-integer(I4P)                    :: na                   !< Number of command line arguments.
-logical                         :: save_block_tecplot   !< Save blocks also in tecplot (ASCII) format.
-integer(I4P)                    :: i,b                  !< Counter.
+character(len=99)                 :: ca_buffer            !< Command argument buffer.
+character(len=99)                 :: file_name_grd        !< Grid file name.
+character(len=99)                 :: file_name_icc        !< Icc file name.
+integer(I4P)                      :: file_unit_grd        !< Grid unit file.
+integer(I4P)                      :: file_unit_icc        !< Icc unit file.
+integer(I4P)                      :: na                   !< Number of command line arguments.
+logical                           :: save_block_tecplot   !< Save blocks also in tecplot (ASCII) format.
+integer(I4P)                      :: blocks_number=0      !< Number of blocks contained into the files.
+type(block_object), allocatable   :: blocks(:)            !< Blocks data.
+integer(I4P)                      :: unstruct_dimension   !< Dimension of unstructured array of rcc.
+integer(I4P)                      :: total_blocks_weight  !< Total blocks weight.
+integer(I4P)                      :: ideal_block_weight   !< Ideal block weight for load balancing.
+real(R4P), allocatable            :: rcc(:)               !< rcc unstructured array.
+logical                           :: is_split_done        !< Sentinel to check is split has been done.
+type(block_object)                :: sb(2)                !< Split blocks.
+integer(I4P), allocatable         :: blocks_olist(:)      !< Blocks ordered (decreasing-workload) list.
+integer(I4P), allocatable         :: blocks_ulist(:)      !< Blocks unassigned list.
+integer(I4P)                      :: procs_number=1       !< Number of processes for load balancing.
+type(process_object), allocatable :: processes(:)         !< Processes data.
+integer(I4P), allocatable         :: processes_olist(:)   !< Processes ordered (increasing-workload) list.
+integer(I4P)                      :: ideal_proc_weight    !< Ideal process weight for load balancing.
+integer(I4P)                      :: proc_unbalance       !< Current process unbalancing in percent.
+integer(I4P)                      :: max_unbalance=4      !< Maximum unbalancing in percent.
+integer(I4P)                      :: i,b,bb,bbb,p         !< Counter.
 
 na = command_argument_count()
 if (na<3) then
@@ -590,6 +815,14 @@ else
       call get_command_argument(4, ca_buffer)
       save_block_tecplot = (trim(adjustl(ca_buffer))=='save_tecplot')
    endif
+   allocate(processes(0:procs_number-1))
+   ! assign processes ID
+   do p=0, procs_number-1
+      processes(p)%id = p
+      processes(p)%blocks = [0_I4P]
+   enddo
+   allocate(processes_olist(0:procs_number-1))
+   processes_olist = [(p,b=0,procs_number-1)]
 endif
 
 if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
@@ -633,45 +866,98 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
       call blocks(b)%parse_rcc(rcc=rcc)
    enddo
    print *, 'finish parse global rcc'
+   ! stop
 
    ! load balancing
-   nblocks_proc = blocks_number / procs_number
    print *, 'load balancing stats'
-   print *, '  ideal number of blocks per process', nblocks_proc
    total_blocks_weight = 0
    do b=1, blocks_number
-      print *, '    block ',b, ' weight ', blocks(b)%weight
-      total_blocks_weight = total_blocks_weight + blocks(b)%weight
+      print *, '    block ',b, ' weight ', blocks(b)%w
+      total_blocks_weight = total_blocks_weight + blocks(b)%w
    enddo
    ideal_block_weight = total_blocks_weight / blocks_number
-   print *, '  ideal block weight for load balancing ', ideal_block_weight
-   print *, '  list of blocks to be splitted'
+   ideal_proc_weight = total_blocks_weight / procs_number
+   print *, '  ideal work load for np "',procs_number,'" processes: ', ideal_proc_weight
+
+   print *, 'order blocks in decreasing-workload-order'
+   blocks_olist = [(b,b=1,blocks_number)] ; call blocks_quick_sort(bs=blocks,bl=blocks_olist,first=1,last=blocks_number)
    do b=1, blocks_number
-      if (blocks(b)%weight>ideal_block_weight) &
-      print *, '    block ',b,' nijk ',blocks(b)%Ni,blocks(b)%Nj,blocks(b)%Nk,' weight ',blocks(b)%weight,'>',ideal_block_weight
+      print *, '    block ',blocks(blocks_olist(b))%ab, ' weight ', blocks(blocks_olist(b))%w, &
+               ' Ni,Nj,Nk ', blocks(blocks_olist(b))%Ni, blocks(blocks_olist(b))%Nj, blocks(blocks_olist(b))%Nk
    enddo
 
-   ! call blocks(2)%split(mgl=2, is_split_done=is_split_done, sb=sb)
-   ! if (is_split_done) then
-   !    print *, 'parent block           ',2,blocks(2)%Ni,blocks(2)%Nj,blocks(2)%Nk
-   !    print *, 'first split block      ',sb(1)%ab,sb(1)%Ni,sb(1)%Nj,sb(1)%Nk
-   !    print *, 'second split block     ',sb(2)%ab,sb(2)%Ni,sb(2)%Nj,sb(2)%Nk
-   !    print *, 'first split block adj  ',sb(1)%adj(1:4,1),sb(1)%adj(1:4,2)
-   !    print *, 'second split block adj ',sb(2)%adj(1:4,1),sb(2)%adj(1:4,2)
-   !    ! ab shift
-   !    do b=sb(2)%ab, blocks_number
-   !       blocks(b)%ab = blocks(b)%ab + 1
-   !    enddo
-   !    ! update blocks list
-   !    if     (sb(1)%ab==1) then ! first block in list has been splitted
-   !       blocks = [sb,blocks(2:blocks_number)]
-   !    elseif (sb(1)%ab==blocks_number) then ! last  block in list has been splitted
-   !       blocks = [blocks(1:blocks_number-1),sb]
-   !    else
-   !       blocks = [blocks(1:sb(1)%ab-1),sb,blocks(sb(1)%ab+1:blocks_number)]
-   !    endif
-   !    blocks_number = blocks_number + 1
-   ! endif
+   ! assign blocks to processes
+   blocks_ulist = blocks_olist
+   do while(allocated(blocks_ulist))
+      p = minloc(processes(0:)%w,dim=1)-1 ! process with minimum workload
+      proc_unbalance = unbalance(ideal_proc_weight,processes(p)%w+blocks(blocks_ulist(1))%w)
+      if (processes(p)%w+blocks(blocks_ulist(1))%w<=ideal_proc_weight) then
+         ! processes(p)%blocks    = [processes(p)%blocks,blocks_ulist(1)]
+         ! processes(p)%w         = processes(p)%w + blocks(blocks_ulist(1))%w
+         ! processes(p)%unbalance = unbalance(ideal_proc_weight,processes(p)%w)
+         ! if (size(blocks_ulist,dim=1)>1) then
+         !    blocks_ulist = blocks_ulist(2:)
+         ! else
+         !    deallocate(blocks_ulist)
+         ! endif
+      else
+         print *, 'block ',blocks(blocks_ulist(1))%ab,' must be split to be insert into process ',&
+               p,' process workload ',processes(p)%w,' new block workload ',blocks(blocks_ulist(1))%w,' unbalancing ',proc_unbalance
+      endif
+         processes(p)%blocks    = [processes(p)%blocks,blocks_ulist(1)]
+         processes(p)%w         = processes(p)%w + blocks(blocks_ulist(1))%w
+         processes(p)%unbalance = unbalance(ideal_proc_weight,processes(p)%w)
+         if (size(blocks_ulist,dim=1)>1) then
+            blocks_ulist = blocks_ulist(2:)
+         else
+            deallocate(blocks_ulist)
+         endif
+   enddo
+   print *, 'processes workload'
+   do p=0, procs_number-1
+      print *, '  process ',p,' workload ',processes(p)%w,' unbalancing ',processes(p)%unbalance,'%',&
+               ' assigned blocks',processes(p)%blocks(2:)
+   enddo
+
+   stop
+
+   b = 1
+   split_loop : do
+      if (blocks(b)%w>ideal_block_weight) then
+         print *, '    block ',b,' nijk ',blocks(b)%Ni,blocks(b)%Nj,blocks(b)%Nk,' weight ',blocks(b)%w,'>',ideal_block_weight
+         print *, '    try to split block ',b
+         call blocks(b)%split(mgl=2, is_split_done=is_split_done, sb=sb)
+         if (is_split_done) then
+            print *, '    block ',b,' splitted'
+            print *, '      first split block  (ab,ni,nj,nk) ',sb(1)%ab,sb(1)%Ni,sb(1)%Nj,sb(1)%Nk
+            print *, '      second split block (ab,ni,nj,nk) ',sb(2)%ab,sb(2)%Ni,sb(2)%Nj,sb(2)%Nk
+            print *, '      first block parents list         ',sb(1)%parents
+            print *, '      second block parents list        ',sb(2)%parents
+            print *, '      update blocks list'
+            ! sanitize old chimera data
+            do bb=1, blocks_number
+               if (bb==b) cycle ! splitted block does not need to be santized, it is replaced by sb
+               call blocks(bb)%sanitize_chimera(sb=sb)
+            enddo
+            ! ab shift
+            do bb=sb(2)%ab, blocks_number
+               blocks(bb)%ab = blocks(bb)%ab + 1
+            enddo
+            ! update blocks list
+            if     (sb(1)%ab==1) then ! first block in list has been splitted
+               blocks = [sb,blocks(2:blocks_number)]
+            elseif (sb(1)%ab==blocks_number) then ! last  block in list has been splitted
+               blocks = [blocks(1:blocks_number-1),sb]
+            else
+               blocks = [blocks(1:sb(1)%ab-1),sb,blocks(sb(1)%ab+1:blocks_number)]
+            endif
+            blocks_number = blocks_number + 1
+            if (sb(1)%w>ideal_block_weight) cycle split_loop
+         endif
+      endif
+      if (b==blocks_number) exit split_loop
+      b = b + 1
+   enddo split_loop
    ! stop
 
    print *, 'save exploded blocks'
@@ -684,6 +970,40 @@ else
 endif
 
 contains
+   recursive subroutine blocks_quick_sort(bs,bl,first,last)
+   !< Order blocks list in decreasing-workload-order by quick sort algorithm.
+   type(block_object), intent(in)    :: bs(1:) !< Blocks data.
+   integer(I4P),       intent(inout) :: bl(1:) !< Blocks ordered list.
+   integer(I4P),       intent(in)    :: first  !< First sort index.
+   integer(I4P),       intent(in)    :: last   !< Last sort index.
+   integer(I4P)                      :: i,j    !< Counter.
+   integer(I4P)                      :: pivot  !< Pivot.
+   integer(I4P)                      :: temp   !< Temporary buffer.
+
+   i = first
+   j = last
+   pivot = bl((first + last)/2)
+
+   do
+      do while (bs(bl(i))%w > bs(pivot)%w)
+          i = i + 1
+      enddo
+      do while (bs(bl(j))%w < bs(pivot)%w)
+          j = j - 1
+      enddo
+      if (i <= j) then
+          temp = bl(i)
+          bl(i) = bl(j)
+          bl(j) = temp
+          i = i + 1
+          j = j - 1
+      endif
+      if (i > j) exit
+   enddo
+   if (first < j) call blocks_quick_sort(bs=bs,bl=bl,first=first,last=j   )
+   if (i < last ) call blocks_quick_sort(bs=bs,bl=bl,first=i    ,last=last)
+   endsubroutine blocks_quick_sort
+
    function is_file_found(file_name) result(is_found)
    !< Inquire is the file path is valid and the file is found.
    character(*), intent(in) :: file_name !< File name.
@@ -691,4 +1011,13 @@ contains
 
    inquire(file=trim(adjustl(file_name)), exist=is_found)
    endfunction is_file_found
+
+   pure function unbalance(ideal_wload,wload)
+   !< Return the unbalance of workload.
+   integer(I4P), intent(in) :: ideal_wload !< Ideal workload.
+   integer(I4P), intent(in) :: wload       !< Workload.
+   integer(I4P)             :: unbalance   !< Workload unbalancing.
+
+   unbalance = nint(((ideal_wload*1._R8P-wload*1._R8P)/ideal_wload*1._R8P)*100._R8P)
+   endfunction unbalance
 endprogram overset_exploded

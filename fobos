@@ -1,0 +1,34 @@
+[modes]
+modes = gnu gnu-debug
+
+[common-variables]
+$CSTATIC_GNU = -c -std=f2008 -fall-intrinsics
+$CSTATIC_INT = -c -standard-semantics -std08
+$DEBUG_GNU   = -O0 -g3 -Warray-bounds -Wcharacter-truncation -Wline-truncation -Wimplicit-interface -Wimplicit-procedure -Wunderflow -fcheck=all -fmodule-private -ffree-line-length-132 -fimplicit-none -fbacktrace -fdump-core -finit-real=nan
+$DEBUG_INT   = -O0 -debug all -warn all -extend-source 132 -traceback
+$OPTIMIZE    = -O2
+
+# main modes
+[gnu]
+template  = template-static-gnu
+build_dir = exe
+
+[gnu-debug]
+template  = template-static-gnu-debug
+build_dir = exe
+
+[template-static-gnu]
+compiler = gnu
+src      = src/
+cflags   = $CSTATIC_GNU $OPTIMIZE
+lflags   = $OPTIMIZE
+colors   = True
+quiet    = False
+
+[template-static-gnu-debug]
+compiler = gnu
+src      = src/
+cflags   = $CSTATIC_GNU $DEBUG_GNU
+lflags   = $DEBUG_GNU
+colors   = True
+quiet    = False

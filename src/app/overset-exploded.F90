@@ -8,7 +8,15 @@ implicit none
 private
 public :: block_object
 public :: bc_int_type, bc_string
-public :: create_blocks_list, load_file_grd, load_file_icc, popout_blocks_list, save_proc_input, update_blocks
+public :: create_blocks_list
+public :: implode_blocks
+public :: load_file_grd
+public :: load_file_icc
+public :: popout_blocks_list
+public :: save_file_grd
+public :: save_file_icc
+public :: save_proc_input
+public :: update_blocks
 
 ! BC parameters
 ! natural BC
@@ -265,7 +273,7 @@ contains
             o = p + 5*(n-1)
             db = nint(chimera(o+1),I4P) ! donor block
             if (db==sb(1)%ab) then
-               ! self block has a chimera reference with a splitted block that must be sanitized, if fall in sb(2)
+               ! self block has a chimera reference with a split block that must be sanitized, if fall in sb(2)
                di = nint(chimera(o+2),I4P) ; dj = nint(chimera(o+3),I4P) ; dk = nint(chimera(o+4),I4P)
                ! check if reference fall in sb(2) domain
                select case(sb(1)%split_dir)
@@ -300,23 +308,24 @@ contains
    endassociate
    endsubroutine sanitize_chimera
 
-   subroutine save_block_file(self, b, rcc, tec)
+   subroutine save_block_file(self, basename, tec)
    !< Save block data into its own file.
    class(block_object), intent(in)           :: self      !< Block data.
-   integer(I4P),        intent(in)           :: b         !< Current block number, global numeration.
-   real(R4P),           intent(in)           :: rcc(1:)   !< rcc unstructured array.
+   character(*),        intent(in), optional :: basename  !< Basename.
    logical,             intent(in), optional :: tec       !< Save (also) in tecplot (ASCII) format (for debugging).
+   character(:), allocatable                 :: bn        !< Basename, local var.
    logical                                   :: tec_      !< Save (also) in tecplot (ASCII) format (for debugging), local var.
    character(len=6)                          :: bstr      !< Block number stringified.
    integer(I4P)                              :: file_unit !< Block unit file.
    integer(I4P)                              :: i,j,k,p,n !< Counter.
    integer(I4P)                              :: o         !< Offset of rcc.
 
+   bn = '' ; if (present(basename)) bn = trim(adjustl(basename))
    tec_ = .false. ; if (present(tec)) tec_ = tec
-   write(bstr, '(I6.5)') b
+   write(bstr, '(I6.5)') self%ab
    associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,nodes=>self%nodes,icc=>self%icc,tcc=>self%tcc,chimera=>self%chimera)
    ! file grid
-   open(newunit=file_unit, file='block-'//trim(adjustl(bstr))//'.blk', form='unformatted', action='write', status='replace')
+   open(newunit=file_unit, file=bn//'block-'//trim(adjustl(bstr))//'.blk', form='unformatted', action='write', status='replace')
    write(file_unit) self%Ni, self%Nj, self%Nk, self%gc
    write(file_unit)(((nodes(1,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
    write(file_unit)(((nodes(2,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
@@ -344,7 +353,7 @@ contains
       case(BC_EDGE)
          write(file_unit) i,j,k,bc_string(tcc(1,i,j,k))
       case default
-         print *, 'error: unknown tcc "',tcc(1,i,j,k),'", b,i,j,k=',b,i,j,k
+         print *, 'error: unknown tcc "',tcc(1,i,j,k),'", b,i,j,k=',self%ab,i,j,k
          stop
       endselect
    enddo
@@ -563,7 +572,7 @@ contains
             do n=1, nint(chimera(p),I4P) ! b,i,j,k,weight for each donor
                o = p + 5*(n-1)
                if (nint(chimera(o+1),R4P)>bs%ab+(1-sb_n)) then
-                  ! reference to a block subsequent to the splitted one, ab index must be shifted
+                  ! reference to a block subsequent to the split one, ab index must be shifted
                   bs%chimera(nchimera+1) = chimera(o+1) + 1
                else
                   bs%chimera(nchimera+1) = chimera(o+1)
@@ -826,6 +835,78 @@ contains
    endif
    endsubroutine create_blocks_list
 
+   pure subroutine implode_blocks(blocks, rcc)
+   !< Implode previously exploded blocks in order to use legacy Xnavis/Xall inputs, transitional debugging mode.
+   type(block_object), intent(inout)              :: blocks(1:)    !< Blocks data.
+   real(R4P),          intent(inout), allocatable :: rcc(:)        !< rcc unstructured array.
+   integer(I4P)                                   :: nchimera      !< Number of chimera data.
+   integer(I4P)                                   :: ndonors       !< Number of donors.
+   integer(I4P)                                   :: Ni,Nj,Nk,gc   !< Block dimensions.
+   integer(I4P)                                   :: b,i,j,k,n,o,p !< Counter.
+
+   if (allocated(rcc)) deallocate(rcc)
+   ! count rcc elements and update blocks%icc
+   nchimera = 0
+   do b=1, size(blocks,dim=1)
+      Ni = blocks(b)%Ni ; Nj = blocks(b)%Nj ; Nk = blocks(b)%Nk ; gc = blocks(b)%gc
+      blocks(b)%icc = 0_I4P
+      do k=1-gc, Nk+gc
+      do j=1-gc, Nj+gc
+      do i=1-gc, Ni+gc
+         select case(blocks(b)%tcc(1,i,j,k))
+         case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
+            nchimera = nchimera + 1          ! BC type
+            blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
+         case(BC_ACTIVE_CELL)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            nchimera = nchimera + 1          ! BC type
+            blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
+            nchimera = nchimera + 1          ! BC chimera donors
+            p = blocks(b)%tcc(2,i,j,k)
+            ndonors = nint(blocks(b)%chimera(p))
+            nchimera = nchimera + ndonors*5  ! b,i,j,k,weight for each donor
+         case(BC_EDGE)
+            nchimera = nchimera + 1          ! BC type
+            blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
+         endselect
+      enddo
+      enddo
+      enddo
+   enddo
+   allocate(rcc(1:nchimera))
+   ! construct global rcc
+   do b=1, size(blocks,dim=1)
+      Ni = blocks(b)%Ni ; Nj = blocks(b)%Nj ; Nk = blocks(b)%Nk ; gc = blocks(b)%gc
+      do k=1-gc, Nk+gc
+      do j=1-gc, Nj+gc
+      do i=1-gc, Ni+gc
+         select case(blocks(b)%tcc(1,i,j,k))
+         case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
+            p = blocks(b)%icc(i,j,k)
+            rcc(p) = real(blocks(b)%tcc(1,i,j,k),R4P) ! BC type
+         case(BC_ACTIVE_CELL)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            p = blocks(b)%icc(i,j,k)
+            o = blocks(b)%tcc(2,i,j,k)
+               rcc(p          ) = real(blocks(b)%tcc(1,i,j,k),R4P)    ! BC type
+               rcc(p+1        ) =      blocks(b)%chimera(o)           ! BC chimera donors
+            do n=1, nint(blocks(b)%chimera(o))                        ! for each donor
+               rcc(p+2+5*(n-1)) =      blocks(b)%chimera(o+1+5*(n-1)) ! b
+               rcc(p+3+5*(n-1)) =      blocks(b)%chimera(o+2+5*(n-1)) ! i
+               rcc(p+4+5*(n-1)) =      blocks(b)%chimera(o+3+5*(n-1)) ! j
+               rcc(p+5+5*(n-1)) =      blocks(b)%chimera(o+4+5*(n-1)) ! k
+               rcc(p+6+5*(n-1)) =      blocks(b)%chimera(o+5+5*(n-1)) ! weight
+            enddo
+         case(BC_EDGE)
+            p = blocks(b)%icc(i,j,k)
+            rcc(p) = real(blocks(b)%tcc(1,i,j,k),R4P) ! BC type
+         endselect
+      enddo
+      enddo
+      enddo
+   enddo
+   endsubroutine implode_blocks
+
    subroutine load_file_grd(file_name,blocks,blocks_number)
    !< Load file grd.
    character(*),       intent(in)                 :: file_name     !< File name
@@ -895,6 +976,57 @@ contains
    if (allocated(blocks_list_)) deallocate(blocks_list_)
    endsubroutine popout_blocks_list
 
+   subroutine save_file_grd(file_name, blocks)
+   !< Save file grd.
+   character(*),       intent(in) :: file_name     !< File name
+   type(block_object), intent(in) :: blocks(1:)    !< Blocks data.
+   integer(I4P)                   :: blocks_number !< Blocks number.
+   integer(I4P)                   :: file_unit     !< File unit.
+   integer(I4P)                   :: Ni,Nj,Nk,gc   !< Block dimensions.
+   integer(I4P)                   :: b,i,j,k       !< Counter.
+
+   blocks_number = size(blocks,dim=1)
+   open(newunit=file_unit, file=trim(adjustl(file_name)), form='unformatted', action='write', status='replace')
+   write(file_unit) blocks_number
+   do b=1, blocks_number
+      write(file_unit) blocks(b)%Ni,blocks(b)%Nj,blocks(b)%Nk,blocks(b)%gc
+   enddo
+   do b=1, blocks_number
+      Ni = blocks(b)%Ni ; Nj = blocks(b)%Nj ; Nk = blocks(b)%Nk ; gc = blocks(b)%gc
+      write(file_unit)(((blocks(b)%nodes(1,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
+      write(file_unit)(((blocks(b)%nodes(2,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
+      write(file_unit)(((blocks(b)%nodes(3,i,j,k),i=0-gc,Ni+gc),j=0-gc,Nj+gc),k=0-gc,Nk+gc)
+   enddo
+   close(file_unit)
+   endsubroutine save_file_grd
+
+   subroutine save_file_icc(file_name, blocks, rcc)
+   !< Save file icc.
+   character(*),       intent(in) :: file_name          !< File name
+   type(block_object), intent(in) :: blocks(1:)         !< Blocks data.
+   real(R4P),          intent(in) :: rcc(1:)            !< rcc unstructured array.
+   integer(I4P)                   :: file_unit          !< File unit.
+   integer(I4P)                   :: blocks_number      !< Blocks number.
+   integer(I4P)                   :: unstruct_dimension !< Dimension of unstructured array rcc.
+   integer(I4P)                   :: Ni,Nj,Nk,gc        !< Block dimensions.
+   integer(I4P)                   :: b,i,j,k            !< Counter.
+
+   blocks_number = size(blocks,dim=1)
+   open(newunit=file_unit, file=trim(adjustl(file_name)), form='unformatted', action='write', status='replace')
+   write(file_unit) blocks_number
+   do b=1, blocks_number
+      write(file_unit) blocks(b)%Ni,blocks(b)%Nj,blocks(b)%Nk,blocks(b)%gc
+   enddo
+   do b=1, blocks_number
+      Ni = blocks(b)%Ni ; Nj = blocks(b)%Nj ; Nk = blocks(b)%Nk ; gc = blocks(b)%gc
+      write(file_unit)(((blocks(b)%icc(i,j,k),i=1-gc,Ni+gc),j=1-gc,Nj+gc),k=1-gc,Nk+gc)
+   enddo
+   unstruct_dimension = size(rcc,dim=1)
+   write(file_unit) unstruct_dimension
+   write(file_unit) (rcc(i),i=1,unstruct_dimension)
+   close(file_unit)
+   endsubroutine save_file_icc
+
    subroutine save_proc_input(blocks, file_name)
    !< Save proc.input file.
    class(block_object), intent(in)           :: blocks(1:)    !< Blocks.
@@ -937,7 +1069,7 @@ contains
    blocks_number = size(blocks,dim=1)
    ! sanitize old chimera data
    do b=1, blocks_number
-      if (b==sb(1)%ab) cycle ! splitted block does not need to be santized, it is replaced by sb
+      if (b==sb(1)%ab) cycle ! split block does not need to be santized, it is replaced by sb
       call blocks(b)%sanitize_chimera(sb=sb)
    enddo
    ! ab shift
@@ -1023,6 +1155,10 @@ character(len=99)                 :: file_name_grd        !< Grid file name.
 character(len=99)                 :: file_name_icc        !< Icc file name.
 character(len=99)                 :: file_name_proc_input !< Name of proc.input file.
 logical                           :: save_block_tecplot   !< Save blocks also in tecplot (ASCII) format.
+logical                           :: save_imploded        !< Save imploded blocks after explosion.
+logical                           :: save_exploded        !< Save exploded blocks.
+character(len=99)                 :: exploded_basename    !< Exploded files basebame.
+integer(I4P)                      :: mgl                  !< Multigrid level to be preserved.
 integer(I4P)                      :: blocks_number        !< Number of blocks contained into the files.
 type(block_object), allocatable   :: blocks(:)            !< Blocks data.
 integer(I4P)                      :: total_blocks_weight  !< Total blocks weight.
@@ -1048,7 +1184,8 @@ interface strz
 endinterface
 
 call parse_command_line(fgrd=file_name_grd,ficc=file_name_icc,fpci=file_name_proc_input,&
-                        stec=save_block_tecplot,np=procs_number,mu=max_unbalance)
+                        stec=save_block_tecplot,simp=save_imploded,sexp=save_exploded,  &
+                        ebn=exploded_basename,np=procs_number,mu=max_unbalance,mgl=mgl)
 
 if ((.not.is_file_found(file_name_grd)).or.(.not.is_file_found(file_name_icc))) then
    write(stderr, "(A)")'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
@@ -1101,9 +1238,9 @@ assign_blocks_loop : do while(allocated(blocks_list))
       call popout_blocks_list(blocks_list=blocks_list)
    else
       print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
-      call blocks(b)%split(mgl=2, is_split_done=is_split_done, sb=sb)
+      call blocks(b)%split(mgl=mgl, is_split_done=is_split_done, sb=sb)
       if (is_split_done) then
-         print *, '   block "'//trim(strz(b,9))//'" splitted'
+         print *, '   block "'//trim(strz(b,9))//'" split'
          print *, '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
          print *, '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
          print *, '      first block parents list      '//trim(str(sb(1)%parents,.true.))
@@ -1129,21 +1266,34 @@ print *, '  proc '//trim(strz(p,6))//&
          '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
 enddo
 call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
-stop
 
-print *, 'save exploded blocks'
-do b=1, blocks_number
-   call blocks(b)%save_block_file(b=b, rcc=rcc, tec=save_block_tecplot)
-enddo
+if (save_exploded) then
+   print *, 'save exploded blocks'
+   do b=1, blocks_number
+      call blocks(b)%save_block_file(basename=exploded_basename, tec=save_block_tecplot)
+   enddo
+endif
+
+if (save_imploded) then
+   print *, 'implode exploded blocks'
+   call implode_blocks(blocks=blocks, rcc=rcc)
+   print *, 'save imploded blocks in legacy overset format (split and load-balanced)'
+   call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
+   call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
+endif
 contains
-   subroutine parse_command_line(fgrd,ficc,fpci,stec,np,mu)
+   subroutine parse_command_line(fgrd,ficc,fpci,stec,simp,sexp,ebn,np,mu,mgl)
    !< Parse command line inputs.
    character(*), intent(out) :: fgrd      !< Grid file name.
    character(*), intent(out) :: ficc      !< Icc file name.
    character(*), intent(out) :: fpci      !< Name of proc.input file.
    logical,      intent(out) :: stec      !< Save blocks also in tecplot (ASCII) format.
+   logical,      intent(out) :: simp      !< Save imploded blocks after explosion.
+   logical,      intent(out) :: sexp      !< Save exploded blocks.
+   character(*), intent(out) :: ebn       !< Exploded files basename.
    integer(I4P), intent(out) :: np        !< Number of processes.
    integer(I4P), intent(out) :: mu        !< Maximum processes unbalancing in percent.
+   integer(I4P), intent(out) :: mgl       !< Multigrid level to be preserved.
    integer(I4P)              :: na        !< Number of command line arguments.
    character(len=99)         :: ca_buffer !< Command argument buffer.
    integer(I4P)              :: a         !< Counter.
@@ -1153,8 +1303,12 @@ contains
    ficc = 'cc.01'
    fpci = 'proc.input'
    stec = .false.
-   np = 1_I4P
-   mu = 1_I4P
+   simp = .false.
+   sexp = .false.
+   ebn  = 'exploded-'
+   np   = 1_I4P
+   mu   = 1_I4P
+   mgl  = 4_I4P
 
    na = command_argument_count()
    a = 1
@@ -1181,8 +1335,20 @@ contains
          a = a + 1
          call get_command_argument(a, ca_buffer)
          read(ca_buffer,*) mu
+      case('-mgl')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         read(ca_buffer,*) mgl
       case('-tec')
          stec = .true.
+      case('-save-imploded')
+         simp = .true.
+      case('-save-exploded')
+         sexp = .true.
+      case('-exploded-basename')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         ebn = trim(adjustl(ca_buffer))
       case('-h','--help')
          call print_help
          stop
@@ -1192,7 +1358,7 @@ contains
          stop
       endselect
       a = a + 1
-      if (a>=na) exit ca_loop
+      if (a>na) exit ca_loop
    enddo ca_loop
    endsubroutine parse_command_line
 
@@ -1207,12 +1373,19 @@ contains
    write(*, "(A)")'   -proc-input file_name_proc_input => proc.input file name, default "proc.input"'
    write(*, "(A)")'   -np #processes_number            => number of processes for load balancing, default 1'
    write(*, "(A)")'   -max-unbalance #mu               => maximum processes unbalancing in percent, default 1%'
+   write(*, "(A)")'   -mgl #mgl                        => multigrid level to be preserved, default 4'
    write(*, "(A)")'   -tec                             => enable tecplot output for debug, default .false.'
+   write(*, "(A)")'   -save-imploded                   => save imploded blocks after explosion, default .false.'
+   write(*, "(A)")'   -save-exploded                   => save exploded blocks, default .false.'
+   write(*, "(A)")'   -exploded-basename               => exploded files basename, default "exploded-"'
+   write(*, "(A)")'   -h, --help                       => print this help message'
    write(*, "(A)")'examples:'
    write(*, "(A)")'   overset-exploded -np 32'
    write(*, "(A)")'   overset-exploded -grd cc.02.grd -icc cc.02 -np 16'
    write(*, "(A)")'   overset-exploded -np 16 -max-unbalance 4'
    write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16'
+   write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16 -save-imploded'
+   write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16 -save-exploded'
    write(*, "(A)")'   overset-exploded -grd cc.03.grd -icc cc.03 -np 2 -tec -max-unbalance 3'
    endsubroutine print_help
 

@@ -19,9 +19,10 @@ Go to [Top](#top)
 
 ## Usage
 
-Overset-Exploded has a built in help manual:
+Overset-Exploded has a built in help that can be invoked with:
 
 ```bash
+overset-exploded -h
 overset-exploded: overset post-processor, automatic blocks-splitting, load-balancing, blocks-explosion
 usage:
    overset-exploded [args]

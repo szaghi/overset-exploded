@@ -29,9 +29,9 @@ args list:
    -grd file_name_grd               => GRD file name, default "cc.01.grd"
    -icc file_name_icc               => ICC file name, default "cc.01"
    -proc-input file_name_proc_input => proc.input file name, default "proc.input"
-   -np #processes_number            => number of processes for load balancing, default 1
-   -max-unbalance #mu               => maximum processes unbalancing in percent, default 1%
-   -mgl #mgl                        => multigrid level to be preserved, default 4
+   -np processes_number             => number of processes for load balancing, default 1
+   -max-unbalance mu                => maximum processes unbalancing in percent, default 1%
+   -mgl mgl                         => multigrid level to be preserved, default 4
    -tec                             => enable tecplot output for debug, default .false.
    -save-imploded                   => save imploded blocks after explosion, default .false.
    -save-exploded                   => save exploded blocks, default .false.

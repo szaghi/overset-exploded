@@ -8,6 +8,7 @@ implicit none
 private
 public :: block_object
 public :: bc_int_type, bc_string
+public :: create_blocks_list, popout_blocks_list, update_blocks
 
 ! BC parameters
 ! natural BC
@@ -87,9 +88,13 @@ type :: block_object
       procedure, pass(self) :: save_block_file    !< Save block data into its own file.
       procedure, pass(self) :: split              !< Split block.
       procedure, pass(self) :: weight             !< Return block weight (work load).
+      generic :: assignment(=) => assign_block    !< Assignment operator overloading.
+      ! private methods
+      procedure, pass(lhs), private :: assign_block !< Operator `=`.
 endtype block_object
 
 contains
+   ! public methods
    elemental subroutine destroy(self)
    !< Destroy dynamic memory.
    class(block_object), intent(inout) :: self !< Block data.
@@ -108,6 +113,9 @@ contains
    self%body  = 0
    self%proc  = 0
    self%is_loaded = .false.
+   if (allocated(self%parents)) deallocate(self%parents)
+   self%split_level = 0
+   self%split_dir   = 0
    endsubroutine destroy
 
    elemental subroutine alloc(self)
@@ -636,7 +644,7 @@ contains
       do k=1-gc, sb(2)%Nk+gc
       do j=1-gc, sb(2)%Nj+gc
       do i=1-gc, sb(2)%Ni+gc
-         sb(2)%tcc(:,i,j,k) = tcc(:,i+(1+sb(1)%Ni)*delta(1),j+(1+sb(1)%Nj)*delta(2),k+(1+sb(1)%Nk)*delta(3))
+         sb(2)%tcc(:,i,j,k) = tcc(:,i+sb(1)%Ni*delta(1),j+sb(1)%Nj*delta(2),k+sb(1)%Nk*delta(3))
       enddo
       enddo
       enddo
@@ -650,6 +658,32 @@ contains
 
    weight = self%Ni*self%Nj*self%Nk
    endfunction weight
+
+   ! private methods
+   pure subroutine assign_block(lhs, rhs)
+   !< Operator `=`
+   class(block_object), intent(inout) :: lhs !< Left hand side.
+   type(block_object),  intent(in)    :: rhs !< Right hand side.
+
+   call lhs%destroy
+                               lhs%Ni          = rhs%Ni
+                               lhs%Nj          = rhs%Nj
+                               lhs%Nk          = rhs%Nk
+                               lhs%gc          = rhs%gc
+                               lhs%w           = rhs%w
+   if (allocated(rhs%nodes  )) lhs%nodes       = rhs%nodes
+   if (allocated(rhs%icc    )) lhs%icc         = rhs%icc
+   if (allocated(rhs%tcc    )) lhs%tcc         = rhs%tcc
+   if (allocated(rhs%chimera)) lhs%chimera     = rhs%chimera
+                               lhs%ab          = rhs%ab
+                               lhs%group       = rhs%group
+                               lhs%body        = rhs%body
+                               lhs%proc        = rhs%proc
+                               lhs%is_loaded   = rhs%is_loaded
+   if (allocated(rhs%parents)) lhs%parents     = rhs%parents
+                               lhs%split_level = rhs%split_level
+                               lhs%split_dir   = rhs%split_dir
+   endsubroutine assign_block
 
    ! non TBP
    pure function bc_int_type(bc_string)
@@ -743,6 +777,110 @@ contains
    case(BC_EDGE                            ) ; bc_string = 'BC_EDGE'
    endselect
    endfunction bc_string
+
+   recursive subroutine blocks_quick_sort(blocks,blocks_list,first,last)
+   !< Order blocks list in decreasing-workload-order by quick sort algorithm.
+   type(block_object), intent(in)    :: blocks(1:)      !< Blocks data.
+   integer(I4P),       intent(inout) :: blocks_list(1:) !< Blocks ordered list.
+   integer(I4P),       intent(in)    :: first           !< First sort index.
+   integer(I4P),       intent(in)    :: last            !< Last sort index.
+   integer(I4P)                      :: i,j             !< Counter.
+   integer(I4P)                      :: pivot           !< Pivot.
+   integer(I4P)                      :: temp            !< Temporary buffer.
+
+   i = first
+   j = last
+   pivot = blocks_list((first + last)/2)
+
+   do
+      do while (blocks(blocks_list(i))%w > blocks(pivot)%w)
+         i = i + 1
+      enddo
+      do while (blocks(blocks_list(j))%w < blocks(pivot)%w)
+         j = j - 1
+      enddo
+      if (i <= j) then
+         temp = blocks_list(i)
+         blocks_list(i) = blocks_list(j)
+         blocks_list(j) = temp
+         i = i + 1
+         j = j - 1
+      endif
+      if (i > j) exit
+   enddo
+   if (first < j) call blocks_quick_sort(blocks=blocks,blocks_list=blocks_list,first=first,last=j   )
+   if (i < last ) call blocks_quick_sort(blocks=blocks,blocks_list=blocks_list,first=i    ,last=last)
+   endsubroutine blocks_quick_sort
+
+   subroutine create_blocks_list(blocks, blocks_list)
+   !< Create blocks list, workload-decreasing-ordered.
+   type(block_object), intent(in)                 :: blocks(1:)     !< Blocks data.
+   integer(I4P),       intent(inout), allocatable :: blocks_list(:) !< Blocks list.
+   integer(I4P)                                   :: blocks_number  !< Blocks number.
+   integer(I4P)                                   :: b              !< Counter.
+
+   blocks_number = size(blocks,dim=1)
+   if (blocks_number>0) then
+      blocks_list = [(b,b=1,blocks_number)]
+      call blocks_quick_sort(blocks=blocks,blocks_list=blocks_list,first=1,last=blocks_number)
+   endif
+   endsubroutine create_blocks_list
+
+   pure subroutine popout_blocks_list(blocks_list)
+   !< Pop-out first element of blocks list.
+   integer(I4P), intent(inout), allocatable :: blocks_list(:)  !< Blocks list.
+   integer(I4P), allocatable                :: blocks_list_(:) !< Blocks list, local var.
+   integer(I4P)                             :: b               !< Counter.
+
+   if (size(blocks_list,dim=1)>1) then
+      ! pop out the block assigned
+      allocate(blocks_list_(1:size(blocks_list,dim=1)-1))
+      do b=2, size(blocks_list,dim=1)
+         blocks_list_(b-1) = blocks_list(b)
+      enddo
+      call move_alloc(from=blocks_list_, to=blocks_list)
+   else
+      ! no other blocks in list, destroy the list
+      deallocate(blocks_list)
+   endif
+   if (allocated(blocks_list_)) deallocate(blocks_list_)
+   endsubroutine popout_blocks_list
+
+   subroutine update_blocks(blocks, sb, blocks_number)
+   !< Update blocks data after a block split.
+   type(block_object), intent(inout), allocatable :: blocks(:)     !< Blocks data.
+   type(block_object), intent(in)                 :: sb(1:)        !< Split blocks.
+   integer(I4P),       intent(out)                :: blocks_number !< Blocks number.
+   type(block_object), allocatable                :: blocks_(:)    !< New blocks data.
+   integer(I4P)                                   :: b             !< Counter.
+
+   blocks_number = size(blocks,dim=1)
+   ! sanitize old chimera data
+   do b=1, blocks_number
+      if (b==sb(1)%ab) cycle ! splitted block does not need to be santized, it is replaced by sb
+      call blocks(b)%sanitize_chimera(sb=sb)
+   enddo
+   ! ab shift
+   do b=sb(2)%ab, blocks_number
+      blocks(b)%ab = blocks(b)%ab + 1
+   enddo
+   ! create new blocks data
+   print*,'blocks number ', blocks_number
+   allocate(blocks_(1:blocks_number+1))
+   do b=1, sb(1)%ab - 1
+      blocks_(b) = blocks(b)
+      call blocks(b)%destroy  ! free memory immediately
+   enddo
+   blocks_(sb(1)%ab) = sb(1)
+   blocks_(sb(2)%ab) = sb(2)
+   do b=sb(1)%ab + 1, blocks_number
+      blocks_(b+1) = blocks(b)
+      call blocks(b)%destroy  ! free memory immediately
+   enddo
+   call move_alloc(from=blocks_, to=blocks)
+   if (allocated(blocks_)) deallocate(blocks_)
+   blocks_number = blocks_number + 1
+   endsubroutine update_blocks
 endmodule oe_block_object
 
 module oe_process_object
@@ -757,11 +895,35 @@ public :: process_object
 
 type :: process_object
    !< Class process object.
-   integer(I4P)              :: id = 0      !< Process ID.
    integer(I4P), allocatable :: blocks(:)   !< List of assigned blocks.
    integer(I4P)              :: w = 0       !< Process workload.
    integer(I4P)              :: unbalance=0 !< Unbalance respect ideal workload.
+   contains
+      procedure, pass(self) :: assign_block !< Assign block to process.
+      procedure, pass(self) :: initialize   !< Initialize process data.
 endtype process_object
+contains
+
+   pure subroutine assign_block(self, ab, wb, ideal_workload)
+   !< Assign block to process.
+   class(process_object), intent(inout) :: self           !< Process.
+   integer(I4P),          intent(in)    :: ab             !< Absolute block index.
+   integer(I4P),          intent(in)    :: wb             !< Block weight.
+   integer(I4P),          intent(in)    :: ideal_workload !< Ideal process workload.
+
+   self%blocks    = [self%blocks,ab]
+   self%w         = self%w + wb
+   self%unbalance = nint(((ideal_workload*1._R8P-self%w*1._R8P)/ideal_workload*1._R8P)*100._R8P)
+   endsubroutine assign_block
+
+   elemental subroutine initialize(self)
+   !< Initialize process data.
+   class(process_object), intent(inout) :: self !< Process.
+
+   self%blocks = [0_I4P]
+   self%w = 0_I4P
+   self%unbalance = 0_I4P
+   endsubroutine initialize
 endmodule oe_process_object
 
 program overset_exploded
@@ -773,30 +935,37 @@ use oe_process_object
 
 implicit none
 
-character(len=99)                 :: ca_buffer            !< Command argument buffer.
-character(len=99)                 :: file_name_grd        !< Grid file name.
-character(len=99)                 :: file_name_icc        !< Icc file name.
-integer(I4P)                      :: file_unit_grd        !< Grid unit file.
-integer(I4P)                      :: file_unit_icc        !< Icc unit file.
-integer(I4P)                      :: na                   !< Number of command line arguments.
-logical                           :: save_block_tecplot   !< Save blocks also in tecplot (ASCII) format.
-integer(I4P)                      :: blocks_number=0      !< Number of blocks contained into the files.
-type(block_object), allocatable   :: blocks(:)            !< Blocks data.
-integer(I4P)                      :: unstruct_dimension   !< Dimension of unstructured array of rcc.
-integer(I4P)                      :: total_blocks_weight  !< Total blocks weight.
-integer(I4P)                      :: ideal_block_weight   !< Ideal block weight for load balancing.
-real(R4P), allocatable            :: rcc(:)               !< rcc unstructured array.
-logical                           :: is_split_done        !< Sentinel to check is split has been done.
-type(block_object)                :: sb(2)                !< Split blocks.
-integer(I4P), allocatable         :: blocks_olist(:)      !< Blocks ordered (decreasing-workload) list.
-integer(I4P), allocatable         :: blocks_ulist(:)      !< Blocks unassigned list.
-integer(I4P)                      :: procs_number=1       !< Number of processes for load balancing.
-type(process_object), allocatable :: processes(:)         !< Processes data.
-integer(I4P), allocatable         :: processes_olist(:)   !< Processes ordered (increasing-workload) list.
-integer(I4P)                      :: ideal_proc_weight    !< Ideal process weight for load balancing.
-integer(I4P)                      :: proc_unbalance       !< Current process unbalancing in percent.
-integer(I4P)                      :: max_unbalance=4      !< Maximum unbalancing in percent.
-integer(I4P)                      :: i,b,bb,bbb,p         !< Counter.
+character(len=99)                 :: ca_buffer           !< Command argument buffer.
+character(len=99)                 :: file_name_grd       !< Grid file name.
+character(len=99)                 :: file_name_icc       !< Icc file name.
+integer(I4P)                      :: file_unit_grd       !< Grid unit file.
+integer(I4P)                      :: file_unit_icc       !< Icc unit file.
+integer(I4P)                      :: na                  !< Number of command line arguments.
+logical                           :: save_block_tecplot  !< Save blocks also in tecplot (ASCII) format.
+integer(I4P)                      :: blocks_number=0     !< Number of blocks contained into the files.
+type(block_object), allocatable   :: blocks(:)           !< Blocks data.
+integer(I4P)                      :: unstruct_dimension  !< Dimension of unstructured array of rcc.
+integer(I4P)                      :: total_blocks_weight !< Total blocks weight.
+real(R4P), allocatable            :: rcc(:)              !< rcc unstructured array.
+logical                           :: is_split_done       !< Sentinel to check is split has been done.
+type(block_object)                :: sb(2)               !< Split blocks.
+integer(I4P), allocatable         :: blocks_list(:)      !< Blocks (unassigned) list (decreasing-workload) ordered.
+integer(I4P)                      :: procs_number=1      !< Number of processes for load balancing.
+type(process_object), allocatable :: processes(:)        !< Processes data.
+integer(I4P)                      :: ideal_proc_weight   !< Ideal process weight for load balancing.
+integer(I4P)                      :: proc_unbalance      !< Current process unbalancing in percent.
+integer(I4P)                      :: max_unbalance=1     !< Maximum unbalancing in percent.
+integer(I4P)                      :: i,b,bb,p            !< Counter.
+
+interface str
+  !< Convert number (real and integer) to string (number to string type casting).
+  procedure str_I4P, str_a_I4P
+endinterface
+
+interface strz
+  !< Convert integer, to string, prefixing with the right number of zeros (integer to string type casting with zero padding).
+  procedure strz_I4P
+endinterface
 
 na = command_argument_count()
 if (na<3) then
@@ -816,13 +985,7 @@ else
       save_block_tecplot = (trim(adjustl(ca_buffer))=='save_tecplot')
    endif
    allocate(processes(0:procs_number-1))
-   ! assign processes ID
-   do p=0, procs_number-1
-      processes(p)%id = p
-      processes(p)%blocks = [0_I4P]
-   enddo
-   allocate(processes_olist(0:procs_number-1))
-   processes_olist = [(p,b=0,procs_number-1)]
+   call processes%initialize
 endif
 
 if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
@@ -862,7 +1025,6 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
    ! parse global rcc
    print *, 'parse global rcc'
    do b=1, blocks_number
-      print *, '  block ',b
       call blocks(b)%parse_rcc(rcc=rcc)
    enddo
    print *, 'finish parse global rcc'
@@ -872,93 +1034,57 @@ if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
    print *, 'load balancing stats'
    total_blocks_weight = 0
    do b=1, blocks_number
-      print *, '    block ',b, ' weight ', blocks(b)%w
+      print *, '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blocks(b)%w,.true.))
       total_blocks_weight = total_blocks_weight + blocks(b)%w
    enddo
-   ideal_block_weight = total_blocks_weight / blocks_number
    ideal_proc_weight = total_blocks_weight / procs_number
-   print *, '  ideal work load for np "',procs_number,'" processes: ', ideal_proc_weight
+   print *, 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_weight,.true.))
 
-   print *, 'order blocks in decreasing-workload-order'
-   blocks_olist = [(b,b=1,blocks_number)] ; call blocks_quick_sort(bs=blocks,bl=blocks_olist,first=1,last=blocks_number)
+   call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
+   print *, 'blocks list in decreasing-workload-order'
    do b=1, blocks_number
-      print *, '    block ',blocks(blocks_olist(b))%ab, ' weight ', blocks(blocks_olist(b))%w, &
-               ' Ni,Nj,Nk ', blocks(blocks_olist(b))%Ni, blocks(blocks_olist(b))%Nj, blocks(blocks_olist(b))%Nk
+      bb = blocks_list(b)
+      print *, '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blocks(bb)%w,.true.))//&
+               ' Ni,Nj,Nk: '//trim(str([blocks(bb)%Ni,blocks(bb)%Nj,blocks(bb)%Nk]))
    enddo
 
    ! assign blocks to processes
-   blocks_ulist = blocks_olist
-   do while(allocated(blocks_ulist))
+   assign_blocks_loop : do while(allocated(blocks_list))
       p = minloc(processes(0:)%w,dim=1)-1 ! process with minimum workload
-      proc_unbalance = unbalance(ideal_proc_weight,processes(p)%w+blocks(blocks_ulist(1))%w)
-      if (processes(p)%w+blocks(blocks_ulist(1))%w<=ideal_proc_weight) then
-         ! processes(p)%blocks    = [processes(p)%blocks,blocks_ulist(1)]
-         ! processes(p)%w         = processes(p)%w + blocks(blocks_ulist(1))%w
-         ! processes(p)%unbalance = unbalance(ideal_proc_weight,processes(p)%w)
-         ! if (size(blocks_ulist,dim=1)>1) then
-         !    blocks_ulist = blocks_ulist(2:)
-         ! else
-         !    deallocate(blocks_ulist)
-         ! endif
+      b = blocks_list(1)                  ! first blocks in unassigned list, the current biggest block
+      ! proc_unbalance = unbalance(ideal_proc_weight,processes(p)%w+blocks(b)%w)
+      if (processes(p)%w+blocks(b)%w<=ideal_proc_weight*(100._R8P+max_unbalance)/100._R8P) then
+         call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_weight)
+         call popout_blocks_list(blocks_list=blocks_list)
       else
-         print *, 'block ',blocks(blocks_ulist(1))%ab,' must be split to be insert into process ',&
-               p,' process workload ',processes(p)%w,' new block workload ',blocks(blocks_ulist(1))%w,' unbalancing ',proc_unbalance
-      endif
-         processes(p)%blocks    = [processes(p)%blocks,blocks_ulist(1)]
-         processes(p)%w         = processes(p)%w + blocks(blocks_ulist(1))%w
-         processes(p)%unbalance = unbalance(ideal_proc_weight,processes(p)%w)
-         if (size(blocks_ulist,dim=1)>1) then
-            blocks_ulist = blocks_ulist(2:)
-         else
-            deallocate(blocks_ulist)
-         endif
-   enddo
-   print *, 'processes workload'
-   do p=0, procs_number-1
-      print *, '  process ',p,' workload ',processes(p)%w,' unbalancing ',processes(p)%unbalance,'%',&
-               ' assigned blocks',processes(p)%blocks(2:)
-   enddo
-
-   stop
-
-   b = 1
-   split_loop : do
-      if (blocks(b)%w>ideal_block_weight) then
-         print *, '    block ',b,' nijk ',blocks(b)%Ni,blocks(b)%Nj,blocks(b)%Nk,' weight ',blocks(b)%w,'>',ideal_block_weight
-         print *, '    try to split block ',b
+         print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
          call blocks(b)%split(mgl=2, is_split_done=is_split_done, sb=sb)
          if (is_split_done) then
-            print *, '    block ',b,' splitted'
-            print *, '      first split block  (ab,ni,nj,nk) ',sb(1)%ab,sb(1)%Ni,sb(1)%Nj,sb(1)%Nk
-            print *, '      second split block (ab,ni,nj,nk) ',sb(2)%ab,sb(2)%Ni,sb(2)%Nj,sb(2)%Nk
-            print *, '      first block parents list         ',sb(1)%parents
-            print *, '      second block parents list        ',sb(2)%parents
-            print *, '      update blocks list'
-            ! sanitize old chimera data
-            do bb=1, blocks_number
-               if (bb==b) cycle ! splitted block does not need to be santized, it is replaced by sb
-               call blocks(bb)%sanitize_chimera(sb=sb)
-            enddo
-            ! ab shift
-            do bb=sb(2)%ab, blocks_number
-               blocks(bb)%ab = blocks(bb)%ab + 1
-            enddo
-            ! update blocks list
-            if     (sb(1)%ab==1) then ! first block in list has been splitted
-               blocks = [sb,blocks(2:blocks_number)]
-            elseif (sb(1)%ab==blocks_number) then ! last  block in list has been splitted
-               blocks = [blocks(1:blocks_number-1),sb]
-            else
-               blocks = [blocks(1:sb(1)%ab-1),sb,blocks(sb(1)%ab+1:blocks_number)]
-            endif
-            blocks_number = blocks_number + 1
-            if (sb(1)%w>ideal_block_weight) cycle split_loop
+            print *, '   block "'//trim(strz(b,9))//'" splitted'
+            print *, '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
+            print *, '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
+            print *, '      first block parents list      '//trim(str(sb(1)%parents,.true.))
+            print *, '      second block parents list     '//trim(str(sb(2)%parents,.true.))
+            print *, '      update blocks data'
+            ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
+            call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
+            call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
+            call processes%initialize
+         else
+            print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
+            call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_weight)
+            call popout_blocks_list(blocks_list=blocks_list)
          endif
       endif
-      if (b==blocks_number) exit split_loop
-      b = b + 1
-   enddo split_loop
-   ! stop
+   enddo assign_blocks_loop
+
+   print *, 'processes workload'
+   do p=0, procs_number-1
+   print *, '  proc '//trim(strz(p,6))//&
+            ' unbalancing '//trim(str(processes(p)%unbalance))//&
+            '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
+   enddo
+   stop
 
    print *, 'save exploded blocks'
    do b=1, blocks_number
@@ -968,42 +1094,7 @@ else
    write(stderr, "(A)")'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
                                    '"'//trim(adjustl(file_name_icc))//'" not found!'
 endif
-
 contains
-   recursive subroutine blocks_quick_sort(bs,bl,first,last)
-   !< Order blocks list in decreasing-workload-order by quick sort algorithm.
-   type(block_object), intent(in)    :: bs(1:) !< Blocks data.
-   integer(I4P),       intent(inout) :: bl(1:) !< Blocks ordered list.
-   integer(I4P),       intent(in)    :: first  !< First sort index.
-   integer(I4P),       intent(in)    :: last   !< Last sort index.
-   integer(I4P)                      :: i,j    !< Counter.
-   integer(I4P)                      :: pivot  !< Pivot.
-   integer(I4P)                      :: temp   !< Temporary buffer.
-
-   i = first
-   j = last
-   pivot = bl((first + last)/2)
-
-   do
-      do while (bs(bl(i))%w > bs(pivot)%w)
-          i = i + 1
-      enddo
-      do while (bs(bl(j))%w < bs(pivot)%w)
-          j = j - 1
-      enddo
-      if (i <= j) then
-          temp = bl(i)
-          bl(i) = bl(j)
-          bl(j) = temp
-          i = i + 1
-          j = j - 1
-      endif
-      if (i > j) exit
-   enddo
-   if (first < j) call blocks_quick_sort(bs=bs,bl=bl,first=first,last=j   )
-   if (i < last ) call blocks_quick_sort(bs=bs,bl=bl,first=i    ,last=last)
-   endsubroutine blocks_quick_sort
-
    function is_file_found(file_name) result(is_found)
    !< Inquire is the file path is valid and the file is found.
    character(*), intent(in) :: file_name !< File name.
@@ -1012,12 +1103,56 @@ contains
    inquire(file=trim(adjustl(file_name)), exist=is_found)
    endfunction is_file_found
 
-   pure function unbalance(ideal_wload,wload)
-   !< Return the unbalance of workload.
-   integer(I4P), intent(in) :: ideal_wload !< Ideal workload.
-   integer(I4P), intent(in) :: wload       !< Workload.
-   integer(I4P)             :: unbalance   !< Workload unbalancing.
+   ! string functions
+   elemental function str_I4P(n, no_sign) result(str)
+   !< Converting integer to string.
+   integer(I4P), intent(in)           :: n       !< Integer to be converted.
+   logical,      intent(in), optional :: no_sign !< Flag for leaving out the sign.
+   character(11)                      :: str     !< Returned string containing input number plus padding zeros.
 
-   unbalance = nint(((ideal_wload*1._R8P-wload*1._R8P)/ideal_wload*1._R8P)*100._R8P)
-   endfunction unbalance
+   write(str, '(I11)') n             ! Casting of n to string.
+   str = adjustl(trim(str))          ! Removing white spaces.
+   if (n>=0_I4P) str='+'//trim(str)  ! Prefixing plus if n>0.
+   if (present(no_sign)) str=str(2:) ! Leaving out the sign.
+   endfunction str_I4P
+
+   elemental function strz_I4P(n, nz_pad) result(str)
+   !< Convert integer to string, prefixing with the right number of zeros.
+   integer(I4P), intent(in)           :: n      !< Integer to be converted.
+   integer(I4P), intent(in), optional :: nz_pad !< Number of zeros padding.
+   character(11)                      :: str    !< Returned string containing input number plus padding zeros.
+
+   write(str,'(I11.10)') n                      ! Casting of n to string.
+   str=str(2:)                                  ! Leaving out the sign.
+   if (present(nz_pad)) str=str(11-nz_pad:11-1) ! Leaving out the extra zeros padding
+   endfunction strz_I4P
+
+   pure function str_a_I4P(n, no_sign, separator, delimiters) result(str)
+   !< Convert integer array to string.
+   integer(I4P), intent(in)           :: n(:)            !< Integer array to be converted.
+   logical,      intent(in), optional :: no_sign         !< Flag for leaving out the sign.
+   character(1), intent(in), optional :: separator       !< Eventual separator of array values.
+   character(*), intent(in), optional :: delimiters(1:2) !< Eventual delimiters of array values.
+   character(len=:), allocatable      :: str             !< Returned string containing input number.
+   character(11)                      :: strn            !< String containing of element of input array number.
+   character(len=1)                   :: sep             !< Array values separator
+   integer                            :: i               !< Counter.
+
+   str = ''
+   sep = ','
+   if(present(separator)) sep = separator
+   if (present(no_sign)) then
+     do i=1,size(n)
+       strn = str_I4P(no_sign=no_sign, n=n(i))
+       str = str//sep//trim(strn)
+     enddo
+   else
+     do i=1,size(n)
+       strn = str_I4P(n=n(i))
+       str = str//sep//trim(strn)
+     enddo
+   endif
+   str = trim(str(2:))
+   if (present(delimiters)) str = delimiters(1)//str//delimiters(2)
+   endfunction str_a_I4P
 endprogram overset_exploded

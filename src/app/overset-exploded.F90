@@ -1,14 +1,14 @@
 module oe_block_object
 !< Overset-Exploded, definition of class block_object.
 
-use, intrinsic :: iso_fortran_env, only : R4P=>real32, R8P=>real64, I4P=>int32
+use, intrinsic :: iso_fortran_env, only : R4P=>real32, R8P=>real64, I4P=>int32, stderr=>error_unit
 
 implicit none
 
 private
 public :: block_object
 public :: bc_int_type, bc_string
-public :: create_blocks_list, popout_blocks_list, save_proc_input, update_blocks
+public :: create_blocks_list, load_file_grd, load_file_icc, popout_blocks_list, save_proc_input, update_blocks
 
 ! BC parameters
 ! natural BC
@@ -826,6 +826,55 @@ contains
    endif
    endsubroutine create_blocks_list
 
+   subroutine load_file_grd(file_name,blocks,blocks_number)
+   !< Load file grd.
+   character(*),       intent(in)                 :: file_name     !< File name
+   type(block_object), intent(inout), allocatable :: blocks(:)     !< Blocks data.
+   integer(I4P),       intent(out)                :: blocks_number !< Blocks number.
+   integer(I4P)                                   :: file_unit     !< File unit.
+   integer(I4P)                                   :: b             !< Counter.
+
+   if (allocated(blocks)) deallocate(blocks)
+   open(newunit=file_unit, file=trim(adjustl(file_name)), form='unformatted', action='read')
+   read(file_unit, end=10, err=10) blocks_number
+   allocate(blocks(1:blocks_number))
+   do b=1, blocks_number
+      call blocks(b)%load_dimensions(ab=b, file_unit=file_unit)
+   enddo
+   do b=1, blocks_number
+      call blocks(b)%load_nodes(file_unit=file_unit)
+   enddo
+   10 close(file_unit)
+   endsubroutine load_file_grd
+
+   subroutine load_file_icc(file_name,blocks,blocks_number,rcc)
+   !< Load file icc.
+   character(*),       intent(in)                 :: file_name          !< File name
+   type(block_object), intent(inout)              :: blocks(1:)         !< Blocks data.
+   integer(I4P),       intent(in)                 :: blocks_number      !< Blocks number.
+   real(R4P),          intent(inout), allocatable :: rcc(:)             !< rcc unstructured array.
+   integer(I4P)                                   :: file_unit          !< File unit.
+   integer(I4P)                                   :: unstruct_dimension !< Dimension of unstructured array rcc.
+   integer(I4P)                                   :: b, i               !< Counter.
+
+   open(newunit=file_unit, file=trim(adjustl(file_name)), form='unformatted', action='read')
+   read(file_unit) b
+   if (b/=blocks_number) then
+      write(stderr, "(A)")'error: grd and icc have different number of blocks'
+      stop
+   endif
+   do b=1, blocks_number
+      call blocks(b)%load_dimensions(file_unit=file_unit)
+   enddo
+   do b=1, blocks_number
+      call blocks(b)%load_icc(file_unit=file_unit)
+   enddo
+   read(file_unit) unstruct_dimension
+   allocate(rcc(1:unstruct_dimension))
+   read(file_unit) (rcc(i),i=1,unstruct_dimension)
+   close(file_unit)
+   endsubroutine load_file_icc
+
    pure subroutine popout_blocks_list(blocks_list)
    !< Pop-out first element of blocks list.
    integer(I4P), intent(inout), allocatable :: blocks_list(:)  !< Blocks list.
@@ -866,9 +915,13 @@ contains
    write(file_unit, *) blocks_number, ' number of blocks'
    write(file_unit, *) ! record skipped
    write(file_unit, *) ! record skipped
-   write(file_unit, *) ' block - group - body - processor'
+   write(file_unit, *) ' block - group - body - processor [history of splits, parents list]'
    do b=1, blocks_number
-      write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc
+      if (allocated(blocks(b)%parents)) then
+         write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc, blocks(b)%parents
+      else
+         write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc, ' original block, no splits'
+      endif
    enddo
    close(file_unit)
    endsubroutine save_proc_input
@@ -966,28 +1019,24 @@ use oe_process_object
 
 implicit none
 
-character(len=99)                 :: ca_buffer           !< Command argument buffer.
-character(len=99)                 :: file_name_grd       !< Grid file name.
-character(len=99)                 :: file_name_icc       !< Icc file name.
-integer(I4P)                      :: file_unit_grd       !< Grid unit file.
-integer(I4P)                      :: file_unit_icc       !< Icc unit file.
-integer(I4P)                      :: na                  !< Number of command line arguments.
-logical                           :: save_block_tecplot  !< Save blocks also in tecplot (ASCII) format.
-integer(I4P)                      :: blocks_number=0     !< Number of blocks contained into the files.
-type(block_object), allocatable   :: blocks(:)           !< Blocks data.
-integer(I4P)                      :: unstruct_dimension  !< Dimension of unstructured array of rcc.
-integer(I4P)                      :: total_blocks_weight !< Total blocks weight.
-real(R4P), allocatable            :: rcc(:)              !< rcc unstructured array.
-logical                           :: is_split_done       !< Sentinel to check is split has been done.
-type(block_object)                :: sb(2)               !< Split blocks.
-integer(I4P), allocatable         :: blocks_list(:)      !< Blocks (unassigned) list (decreasing-workload) ordered.
-integer(I4P)                      :: procs_number=1      !< Number of processes for load balancing.
-type(process_object), allocatable :: processes(:)        !< Processes data.
-integer(I4P)                      :: ideal_proc_workload !< Ideal process weight for load balancing.
-integer(I4P)                      :: proc_unbalance      !< Current process unbalancing in percent.
-integer(I4P)                      :: max_unbalance=1     !< Maximum unbalancing in percent.
-integer(I4P)                      :: i,b,bb,p            !< Counter.
+character(len=99)                 :: file_name_grd        !< Grid file name.
+character(len=99)                 :: file_name_icc        !< Icc file name.
+character(len=99)                 :: file_name_proc_input !< Name of proc.input file.
+logical                           :: save_block_tecplot   !< Save blocks also in tecplot (ASCII) format.
+integer(I4P)                      :: blocks_number        !< Number of blocks contained into the files.
+type(block_object), allocatable   :: blocks(:)            !< Blocks data.
+integer(I4P)                      :: total_blocks_weight  !< Total blocks weight.
+real(R4P), allocatable            :: rcc(:)               !< rcc unstructured array.
+logical                           :: is_split_done        !< Sentinel to check is split has been done.
+type(block_object)                :: sb(2)                !< Split blocks.
+integer(I4P), allocatable         :: blocks_list(:)       !< Blocks (unassigned) list (decreasing-workload) ordered.
+integer(I4P)                      :: procs_number         !< Number of processes for load balancing.
+type(process_object), allocatable :: processes(:)         !< Processes data.
+integer(I4P)                      :: ideal_proc_workload  !< Ideal process weight for load balancing.
+integer(I4P)                      :: max_unbalance        !< Maximum processes unbalancing in percent.
+integer(I4P)                      :: i,b,bb,p             !< Counter.
 
+! interface for auxiliary procedures
 interface str
   !< Convert number (real and integer) to string (number to string type casting).
   procedure str_I4P, str_a_I4P
@@ -998,136 +1047,175 @@ interface strz
   procedure strz_I4P
 endinterface
 
-na = command_argument_count()
-if (na<3) then
-   write(stderr, "(A)")'error: you must pass file_name_grd, file_name_icc and procs number as command line arguments'
-   write(stderr, "(A)")'example: overset-exploded cc.01.grd cc.01 16'
-   write(stderr, "(A)")'if you want to save blocks in tecplot format pass also "save_tecplot"'
-   write(stderr, "(A)")'example: overset-exploded cc.01.grd cc.01 16 save_tecplot'
+call parse_command_line(fgrd=file_name_grd,ficc=file_name_icc,fpci=file_name_proc_input,&
+                        stec=save_block_tecplot,np=procs_number,mu=max_unbalance)
+
+if ((.not.is_file_found(file_name_grd)).or.(.not.is_file_found(file_name_icc))) then
+   write(stderr, "(A)")'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
+                                   '"'//trim(adjustl(file_name_icc))//'" not found!'
    stop
-else
-   save_block_tecplot = .false.
-   call get_command_argument(1, file_name_grd)
-   call get_command_argument(2, file_name_icc)
-   call get_command_argument(3, ca_buffer)
-   read(ca_buffer,*) procs_number
-   if (na==4) then
-      call get_command_argument(4, ca_buffer)
-      save_block_tecplot = (trim(adjustl(ca_buffer))=='save_tecplot')
-   endif
-   allocate(processes(0:procs_number-1))
-   call processes%initialize
 endif
 
-if (is_file_found(file_name_grd).and.is_file_found(file_name_icc)) then
-   ! grd file
-   print *, 'load grd file ',trim(adjustl(file_name_grd))
-   open(newunit=file_unit_grd, file=trim(adjustl(file_name_grd)), form='unformatted', action='read')
-   read(file_unit_grd, end=10, err=10) blocks_number
-   allocate(blocks(1:blocks_number))
-   do b=1, blocks_number
-      call blocks(b)%load_dimensions(ab=b, file_unit=file_unit_grd)
-   enddo
-   do b=1, blocks_number
-      call blocks(b)%load_nodes(file_unit=file_unit_grd)
-   enddo
-   10 close(file_unit_grd)
+allocate(processes(0:procs_number-1))
+call processes%initialize
 
-   ! icc file
-   print *, 'load icc file ',trim(adjustl(file_name_icc))
-   open(newunit=file_unit_icc, file=trim(adjustl(file_name_icc)), form='unformatted', action='read')
-   read(file_unit_icc) b
-   if (b/=blocks_number) then
-      write(stderr, "(A)")'error: grd and icc have different number of blocks'
-      stop
-   endif
-   do b=1, blocks_number
-      call blocks(b)%load_dimensions(file_unit=file_unit_icc)
-   enddo
-   do b=1, blocks_number
-      call blocks(b)%load_icc(file_unit=file_unit_icc)
-   enddo
-   read(file_unit_icc) unstruct_dimension
-   allocate(rcc(1:unstruct_dimension))
-   read(file_unit_icc) (rcc(i),i=1,unstruct_dimension)
-   close(file_unit_icc)
-   print *, 'finish load input files'
+print *, 'load grd file ',trim(adjustl(file_name_grd))
+call load_file_grd(file_name=file_name_grd,blocks=blocks,blocks_number=blocks_number)
 
-   ! parse global rcc
-   print *, 'parse global rcc'
-   do b=1, blocks_number
-      call blocks(b)%parse_rcc(rcc=rcc)
-   enddo
-   print *, 'finish parse global rcc'
-   ! stop
+print *, 'load icc file ',trim(adjustl(file_name_icc))
+call load_file_icc(file_name=file_name_icc,blocks=blocks,blocks_number=blocks_number,rcc=rcc)
+print *, 'finish load input files'
 
-   ! load balancing
-   print *, 'load balancing stats'
-   total_blocks_weight = 0
-   do b=1, blocks_number
-      print *, '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blocks(b)%w,.true.))
-      total_blocks_weight = total_blocks_weight + blocks(b)%w
-   enddo
-   ideal_proc_workload = total_blocks_weight / procs_number
-   print *, 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
+! parse global rcc
+print *, 'parse global rcc and create block-local-rcc'
+do b=1, blocks_number
+   call blocks(b)%parse_rcc(rcc=rcc)
+enddo
+print *, 'finish parse global rcc'
 
-   call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
-   print *, 'blocks list in decreasing-workload-order'
-   do b=1, blocks_number
-      bb = blocks_list(b)
-      print *, '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blocks(bb)%w,.true.))//&
-               ' Ni,Nj,Nk: '//trim(str([blocks(bb)%Ni,blocks(bb)%Nj,blocks(bb)%Nk]))
-   enddo
+! load balancing
+print *, 'load balancing stats'
+total_blocks_weight = 0
+do b=1, blocks_number
+   print *, '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blocks(b)%w,.true.))
+   total_blocks_weight = total_blocks_weight + blocks(b)%w
+enddo
+ideal_proc_workload = total_blocks_weight / procs_number
+print *, 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
 
-   ! assign blocks to processes
-   assign_blocks_loop : do while(allocated(blocks_list))
-      p = minloc(processes(0:)%w,dim=1)-1 ! process with minimum workload
-      b = blocks_list(1)                  ! first blocks in unassigned list, the current biggest block
-      if (processes(p)%w+blocks(b)%w<=ideal_proc_workload*(100._R8P+max_unbalance)/100._R8P) then
+call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
+print *, 'blocks list in decreasing-workload-order'
+do b=1, blocks_number
+   bb = blocks_list(b)
+   print *, '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blocks(bb)%w,.true.))//&
+            ' Ni,Nj,Nk: '//trim(str([blocks(bb)%Ni,blocks(bb)%Nj,blocks(bb)%Nk]))
+enddo
+
+! assign blocks to processes
+assign_blocks_loop : do while(allocated(blocks_list))
+   p = minloc(processes(0:)%w,dim=1)-1 ! process with minimum workload
+   b = blocks_list(1)                  ! first blocks in unassigned list, the current biggest block
+   if (processes(p)%w+blocks(b)%w<=ideal_proc_workload*(100._R8P+max_unbalance)/100._R8P) then
+      blocks(b)%proc = p
+      call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
+      call popout_blocks_list(blocks_list=blocks_list)
+   else
+      print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
+      call blocks(b)%split(mgl=2, is_split_done=is_split_done, sb=sb)
+      if (is_split_done) then
+         print *, '   block "'//trim(strz(b,9))//'" splitted'
+         print *, '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
+         print *, '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
+         print *, '      first block parents list      '//trim(str(sb(1)%parents,.true.))
+         print *, '      second block parents list     '//trim(str(sb(2)%parents,.true.))
+         print *, '      update blocks data'
+         ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
+         call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
+         call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
+         call processes%initialize
+      else
+         print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
          blocks(b)%proc = p
          call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
          call popout_blocks_list(blocks_list=blocks_list)
-      else
-         print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
-         call blocks(b)%split(mgl=2, is_split_done=is_split_done, sb=sb)
-         if (is_split_done) then
-            print *, '   block "'//trim(strz(b,9))//'" splitted'
-            print *, '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
-            print *, '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
-            print *, '      first block parents list      '//trim(str(sb(1)%parents,.true.))
-            print *, '      second block parents list     '//trim(str(sb(2)%parents,.true.))
-            print *, '      update blocks data'
-            ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
-            call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
-            call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
-            call processes%initialize
-         else
-            print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
-            blocks(b)%proc = p
-            call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
-            call popout_blocks_list(blocks_list=blocks_list)
-         endif
       endif
-   enddo assign_blocks_loop
+   endif
+enddo assign_blocks_loop
 
-   print *, 'processes workload'
-   do p=0, procs_number-1
-   print *, '  proc '//trim(strz(p,6))//&
-            ' unbalancing '//trim(str(processes(p)%unbalance))//&
-            '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
-   enddo
-   call save_proc_input(blocks=blocks)
-   stop
+print *, 'processes workload'
+do p=0, procs_number-1
+print *, '  proc '//trim(strz(p,6))//&
+         ' unbalancing '//trim(str(processes(p)%unbalance))//&
+         '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
+enddo
+call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
+stop
 
-   print *, 'save exploded blocks'
-   do b=1, blocks_number
-      call blocks(b)%save_block_file(b=b, rcc=rcc, tec=save_block_tecplot)
-   enddo
-else
-   write(stderr, "(A)")'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
-                                   '"'//trim(adjustl(file_name_icc))//'" not found!'
-endif
+print *, 'save exploded blocks'
+do b=1, blocks_number
+   call blocks(b)%save_block_file(b=b, rcc=rcc, tec=save_block_tecplot)
+enddo
 contains
+   subroutine parse_command_line(fgrd,ficc,fpci,stec,np,mu)
+   !< Parse command line inputs.
+   character(*), intent(out) :: fgrd      !< Grid file name.
+   character(*), intent(out) :: ficc      !< Icc file name.
+   character(*), intent(out) :: fpci      !< Name of proc.input file.
+   logical,      intent(out) :: stec      !< Save blocks also in tecplot (ASCII) format.
+   integer(I4P), intent(out) :: np        !< Number of processes.
+   integer(I4P), intent(out) :: mu        !< Maximum processes unbalancing in percent.
+   integer(I4P)              :: na        !< Number of command line arguments.
+   character(len=99)         :: ca_buffer !< Command argument buffer.
+   integer(I4P)              :: a         !< Counter.
+
+   ! defaults
+   fgrd = 'cc.01.grd'
+   ficc = 'cc.01'
+   fpci = 'proc.input'
+   stec = .false.
+   np = 1_I4P
+   mu = 1_I4P
+
+   na = command_argument_count()
+   a = 1
+   ca_loop : do
+      call get_command_argument(a, ca_buffer)
+      select case(trim(adjustl(ca_buffer)))
+      case('-grd')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         fgrd = trim(adjustl(ca_buffer))
+      case('-icc')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         ficc = trim(adjustl(ca_buffer))
+      case('-proc-input')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         fpci = trim(adjustl(ca_buffer))
+      case('-np')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         read(ca_buffer,*) np
+      case('-max-unbalance')
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         read(ca_buffer,*) mu
+      case('-tec')
+         stec = .true.
+      case('-h','--help')
+         call print_help
+         stop
+      case default
+         write(stderr, "(A)")'error: command line argument "'//trim(adjustl(ca_buffer))//'" unkwnown!'
+         call print_help
+         stop
+      endselect
+      a = a + 1
+      if (a>=na) exit ca_loop
+   enddo ca_loop
+   endsubroutine parse_command_line
+
+   subroutine print_help
+   !< Print help message.
+   write(*, "(A)")'overset-exploded: overset post-processor, automatic blocks-splitting, load-balancing, blocks-explosion'
+   write(*, "(A)")'usage:'
+   write(*, "(A)")'   overset-exploded [args]'
+   write(*, "(A)")'args list:'
+   write(*, "(A)")'   -grd file_name_grd               => GRD file name, default "cc.01.grd"'
+   write(*, "(A)")'   -icc file_name_icc               => ICC file name, default "cc.01"'
+   write(*, "(A)")'   -proc-input file_name_proc_input => proc.input file name, default "proc.input"'
+   write(*, "(A)")'   -np #processes_number            => number of processes for load balancing, default 1'
+   write(*, "(A)")'   -max-unbalance #mu               => maximum processes unbalancing in percent, default 1%'
+   write(*, "(A)")'   -tec                             => enable tecplot output for debug, default .false.'
+   write(*, "(A)")'examples:'
+   write(*, "(A)")'   overset-exploded -np 32'
+   write(*, "(A)")'   overset-exploded -grd cc.02.grd -icc cc.02 -np 16'
+   write(*, "(A)")'   overset-exploded -np 16 -max-unbalance 4'
+   write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16'
+   write(*, "(A)")'   overset-exploded -grd cc.03.grd -icc cc.03 -np 2 -tec -max-unbalance 3'
+   endsubroutine print_help
+
    ! files procedures
    function is_file_found(file_name) result(is_found)
    !< Inquire is the file path is valid and the file is found.

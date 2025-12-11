@@ -61,8 +61,8 @@ integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_J0              = 63
 integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_JN              = 64   !< Adjacent along face jn.
 integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_K0              = 65   !< Adjacent along face k0.
 integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_KN              = 66   !< Adjacent along face kn.
-! edge BC
-integer(kind=I4P), parameter, public :: BC_EDGE                             = 80   !< Edge.
+! chimera BC, edge
+integer(kind=I4P), parameter, public :: BC_CHIMERA_EDGE                     = 80   !< Edge.
 
 type :: block_object
    !<  Block class.
@@ -71,6 +71,9 @@ type :: block_object
    integer(I4P)              :: Nk=0              !< Number of cells in k direction.
    integer(I4P)              :: gc=2              !< Number of ghost cells.
    integer(I4P)              :: w=0               !< Block weight (work load).
+   integer(I4P)              :: nactive=0         !< Number of cells without BC, active cell.
+   integer(I4P)              :: nnatural=0        !< Number of cells with natural BC.
+   integer(I4P)              :: nchimera=0        !< Number of cells with chimera BC.
    real(R8P),    allocatable :: nodes(:,:,:,:)    !< Nodes coordinates.
    integer(I4P), allocatable :: icc(:,:,:)        !< Cell centered icc values.
    integer(I4P), allocatable :: tcc(:,:,:,:)      !< BC type and eventual index on chimera values [1:2,1-gc:ni,1-gc:nj,1-gc:nk].
@@ -112,6 +115,9 @@ contains
    self%Nk = 0
    self%gc = 2
    self%w  = 0
+   self%nactive  = 0
+   self%nnatural = 0
+   self%nchimera = 0
    if (allocated(self%nodes)) deallocate(self%nodes)
    if (allocated(self%icc)) deallocate(self%icc)
    if (allocated(self%tcc)) deallocate(self%tcc)
@@ -185,15 +191,15 @@ contains
    endassociate
    endsubroutine load_nodes
 
-   pure subroutine parse_rcc(self, rcc)
+   subroutine parse_rcc(self, rcc)
    !< Parse global rcc and store in local tcc/chimera arrays.
    class(block_object), intent(inout) :: self      !< Block data.
    real(R4P),           intent(in)    :: rcc(1:)   !< rcc unstructured array.
-   integer(I4P)                       :: nchimera  !< Number of chimera data.
    integer(I4P)                       :: ndonors   !< Number of donors.
    integer(I4P)                       :: i,j,k,n,p !< Counter.
 
-   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc)
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc,&
+             nactive=>self%nactive,nnatural=>self%nnatural,nchimera=>self%nchimera)
    if (allocated(self%chimera)) deallocate(self%chimera)
    self%tcc(1,:,:,:) = BC_ACTIVE_CELL ! set all cell type to active cell
    nchimera = 0
@@ -202,20 +208,18 @@ contains
    do i=1-gc, Ni+gc
       p = icc(i,j,k)
       if (p>0) then
-         self%tcc(1,i,j,k) = int(rcc(p),I4P)
-         select case(int(rcc(p),I4P))
+         self%tcc(1,i,j,k) = nint(rcc(p),I4P)
+         select case(nint(rcc(p),I4P))
          case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
             ! no additional data is necessary
          case(BC_ACTIVE_CELL)
             ! no additional data is necessary
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
             ! for chimera BC it is necessary to store other data
             nchimera = nchimera + 1
             self%tcc(2,i,j,k) = nchimera
             ndonors = nint(rcc(p+1),I4P)    ! donors number
             nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
-         case(BC_EDGE)
-            ! no additional data is necessary
          case default
             ! print *, 'error: unknown tcc "',self%tcc(1,i,j,k),'", ab,i,j,k=',self%ab,i,j,k
          endselect
@@ -231,18 +235,24 @@ contains
       do i=1-gc, Ni+gc
          p = icc(i,j,k)
          if (p>0) then
-            select case(int(rcc(p),I4P))
-            case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+            select case(nint(rcc(p),I4P))
+            case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
+            case(BC_ACTIVE_CELL)
+            case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
                nchimera = nchimera + 1
+               ndonors = nint(rcc(p+1),I4P)      ! donors number
                self%chimera(nchimera) = rcc(p+1) ! donors number
-               do n=1, nint(rcc(p+1),I4P)
+               do n=1, ndonors
                   self%chimera(nchimera+1+5*(n-1)) = rcc(p+2+5*(n-1)) ! b
                   self%chimera(nchimera+2+5*(n-1)) = rcc(p+3+5*(n-1)) ! i
                   self%chimera(nchimera+3+5*(n-1)) = rcc(p+4+5*(n-1)) ! j
                   self%chimera(nchimera+4+5*(n-1)) = rcc(p+5+5*(n-1)) ! k
                   self%chimera(nchimera+5+5*(n-1)) = rcc(p+6+5*(n-1)) ! weight
                enddo
-               nchimera = nchimera + nint(rcc(p+1),I4P)*5 ! b,i,j,k,weight for each donor
+               nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
+            case default
+               write(stderr, *)'error: unknown tcc "',self%tcc(1,i,j,k),'", ab,i,j,k=',self%ab,i,j,k
+               stop
             endselect
          endif
       enddo
@@ -342,7 +352,7 @@ contains
          write(file_unit) i,j,k,bc_string(tcc(1,i,j,k))
       case(BC_ACTIVE_CELL)
          ! save nothing for active cell
-      case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+      case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
          p = tcc(2,i,j,k)
          write(file_unit) i,j,k,bc_string(tcc(1,i,j,k))
          write(file_unit) nint(chimera(p),I4P) ! donors number
@@ -350,8 +360,6 @@ contains
             o = p + 5*(n-1)
             write(file_unit) nint(chimera(o+1)),nint(chimera(o+2)),nint(chimera(o+3)),nint(chimera(o+4)),chimera(o+5)
          enddo
-      case(BC_EDGE)
-         write(file_unit) i,j,k,bc_string(tcc(1,i,j,k))
       case default
          print *, 'error: unknown tcc "',tcc(1,i,j,k),'", b,i,j,k=',self%ab,i,j,k
          stop
@@ -680,6 +688,9 @@ contains
                                lhs%Nk          = rhs%Nk
                                lhs%gc          = rhs%gc
                                lhs%w           = rhs%w
+                               lhs%nactive     = rhs%nactive
+                               lhs%nnatural    = rhs%nnatural
+                               lhs%nchimera    = rhs%nchimera
    if (allocated(rhs%nodes  )) lhs%nodes       = rhs%nodes
    if (allocated(rhs%icc    )) lhs%icc         = rhs%icc
    if (allocated(rhs%tcc    )) lhs%tcc         = rhs%tcc
@@ -737,7 +748,7 @@ contains
    case('BC_CHIMERA_FACE_ADJ_JN'             ,'bc_chimera_face_adj_jn'             );bc_int_type=BC_CHIMERA_FACE_ADJ_JN
    case('BC_CHIMERA_FACE_ADJ_K0'             ,'bc_chimera_face_adj_k0'             );bc_int_type=BC_CHIMERA_FACE_ADJ_K0
    case('BC_CHIMERA_FACE_ADJ_KN'             ,'bc_chimera_face_adj_kn'             );bc_int_type=BC_CHIMERA_FACE_ADJ_KN
-   case('BC_EDGE'                            ,'bc_edge'                            );bc_int_type=BC_EDGE
+   case('BC_CHIMERA_EDGE'                    ,'bc_chimera_edge'                    );bc_int_type=BC_CHIMERA_EDGE
    endselect
    endfunction bc_int_type
 
@@ -783,7 +794,7 @@ contains
    case(BC_CHIMERA_FACE_ADJ_JN             ) ; bc_string = 'BC_CHIMERA_FACE_ADJ_JN'
    case(BC_CHIMERA_FACE_ADJ_K0             ) ; bc_string = 'BC_CHIMERA_FACE_ADJ_K0'
    case(BC_CHIMERA_FACE_ADJ_KN             ) ; bc_string = 'BC_CHIMERA_FACE_ADJ_KN'
-   case(BC_EDGE                            ) ; bc_string = 'BC_EDGE'
+   case(BC_CHIMERA_EDGE                    ) ; bc_string = 'BC_CHIMERA_EDGE'
    endselect
    endfunction bc_string
 
@@ -835,7 +846,7 @@ contains
    endif
    endsubroutine create_blocks_list
 
-   pure subroutine implode_blocks(blocks, rcc)
+   subroutine implode_blocks(blocks, rcc)
    !< Implode previously exploded blocks in order to use legacy Xnavis/Xall inputs, transitional debugging mode.
    type(block_object), intent(inout)              :: blocks(1:)    !< Blocks data.
    real(R4P),          intent(inout), allocatable :: rcc(:)        !< rcc unstructured array.
@@ -858,16 +869,16 @@ contains
             nchimera = nchimera + 1          ! BC type
             blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
          case(BC_ACTIVE_CELL)
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
             nchimera = nchimera + 1          ! BC type
             blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
             nchimera = nchimera + 1          ! BC chimera donors
             p = blocks(b)%tcc(2,i,j,k)
             ndonors = nint(blocks(b)%chimera(p))
             nchimera = nchimera + ndonors*5  ! b,i,j,k,weight for each donor
-         case(BC_EDGE)
-            nchimera = nchimera + 1          ! BC type
-            blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
+         case default
+            write(stderr, *)'error: unknown tcc "',blocks(b)%tcc(1,i,j,k),'", ab,i,j,k=',blocks(b)%ab,i,j,k
+            stop
          endselect
       enddo
       enddo
@@ -885,7 +896,7 @@ contains
             p = blocks(b)%icc(i,j,k)
             rcc(p) = real(blocks(b)%tcc(1,i,j,k),R4P) ! BC type
          case(BC_ACTIVE_CELL)
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
             p = blocks(b)%icc(i,j,k)
             o = blocks(b)%tcc(2,i,j,k)
                rcc(p          ) = real(blocks(b)%tcc(1,i,j,k),R4P)    ! BC type
@@ -897,9 +908,9 @@ contains
                rcc(p+5+5*(n-1)) =      blocks(b)%chimera(o+4+5*(n-1)) ! k
                rcc(p+6+5*(n-1)) =      blocks(b)%chimera(o+5+5*(n-1)) ! weight
             enddo
-         case(BC_EDGE)
-            p = blocks(b)%icc(i,j,k)
-            rcc(p) = real(blocks(b)%tcc(1,i,j,k),R4P) ! BC type
+         case default
+            write(stderr, *)'error: unknown tcc "',blocks(b)%tcc(1,i,j,k),'", ab,i,j,k=',blocks(b)%ab,i,j,k
+            stop
          endselect
       enddo
       enddo
@@ -1205,8 +1216,10 @@ print *, 'finish load input files'
 
 ! parse global rcc
 print *, 'parse global rcc and create block-local-rcc'
+print '(A)', 'total chimera elements '//trim(str(size(rcc,dim=1)))
 do b=1, blocks_number
    call blocks(b)%parse_rcc(rcc=rcc)
+   print '(A)', 'block '//trim(str(b,.true.))//' chimera elements number: '//trim(str(size(blocks(b)%chimera,dim=1)))
 enddo
 print *, 'finish parse global rcc'
 
@@ -1277,9 +1290,10 @@ endif
 if (save_imploded) then
    print *, 'implode exploded blocks'
    call implode_blocks(blocks=blocks, rcc=rcc)
+   print '(A)', 'total chimera elements after implosion'//trim(str(size(rcc,dim=1)))
    print *, 'save imploded blocks in legacy overset format (split and load-balanced)'
-   call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
-   call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
+   ! call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
+   ! call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
 endif
 contains
    subroutine parse_command_line(fgrd,ficc,fpci,stec,simp,sexp,ebn,np,mu,mgl)

@@ -20,49 +20,52 @@ public :: update_blocks
 
 ! BC parameters
 ! natural BC
-integer(kind=I4P), parameter, public :: BC_NATURAL_WALL                     = -1   !< Viscous wall.
-integer(kind=I4P), parameter, public :: BC_NATURAL_SIMMETRY                 = -2   !< Simmetry.
-integer(kind=I4P), parameter, public :: BC_NATURAL_INFLOW                   = -3   !< Inflow.
-integer(kind=I4P), parameter, public :: BC_NATURAL_INOUTFLOW                = -4   !< In/outflow.
-integer(kind=I4P), parameter, public :: BC_NATURAL_ASSIGNED_INFLOW          = -5   !< Assigned inflow.
-integer(kind=I4P), parameter, public :: BC_NATURAL_ASSIGNED_PRESSURE        = -6   !< Assigned pressure.
-integer(kind=I4P), parameter, public :: BC_NATURAL_ASSIGNED_NORMAL_VELOCITY = -7   !< Assigned normal velocity.
-integer(kind=I4P), parameter, public :: BC_NATURAL_ASSIGNED_RIEMANN         = -8   !< Assigned Riemann invariant.
-integer(kind=I4P), parameter, public :: BC_NATURAL_EXTRAPOLATED             = -9   !< Extrapolated.
-integer(kind=I4P), parameter, public :: BC_NATURAL_MOVING_WALL              = -10  !< Moving wall.
-integer(kind=I4P), parameter, public :: BC_NATURAL_INACTIVE_WALL            = -11  !< Inactive wall.
-integer(kind=I4P), parameter, public :: BC_NATURAL_EXTRAPOLATED_ALT         = -19  !< Extrapolated (alternative).
+integer(I4P), parameter, public :: BC_NATURAL_WALL                     = -1   !< Viscous wall.
+integer(I4P), parameter, public :: BC_NATURAL_SIMMETRY                 = -2   !< Simmetry.
+integer(I4P), parameter, public :: BC_NATURAL_INFLOW                   = -3   !< Inflow.
+integer(I4P), parameter, public :: BC_NATURAL_INOUTFLOW                = -4   !< In/outflow.
+integer(I4P), parameter, public :: BC_NATURAL_ASSIGNED_INFLOW          = -5   !< Assigned inflow.
+integer(I4P), parameter, public :: BC_NATURAL_ASSIGNED_PRESSURE        = -6   !< Assigned pressure.
+integer(I4P), parameter, public :: BC_NATURAL_ASSIGNED_NORMAL_VELOCITY = -7   !< Assigned normal velocity.
+integer(I4P), parameter, public :: BC_NATURAL_ASSIGNED_RIEMANN         = -8   !< Assigned Riemann invariant.
+integer(I4P), parameter, public :: BC_NATURAL_EXTRAPOLATED             = -9   !< Extrapolated.
+integer(I4P), parameter, public :: BC_NATURAL_MOVING_WALL              = -10  !< Moving wall.
+integer(I4P), parameter, public :: BC_NATURAL_INACTIVE_WALL            = -11  !< Inactive wall.
+integer(I4P), parameter, public :: BC_NATURAL_EXTRAPOLATED_ALT         = -19  !< Extrapolated (alternative).
+integer(I4P), parameter, public :: BC_NATURAL_RCC_RESERVED_DATA        =  19  !< RCC data reserved for BC natural.
 ! non BC, active cell
-integer(kind=I4P), parameter, public :: BC_ACTIVE_CELL                      = 0    !< Non BC, active cell.
+integer(I4P), parameter, public :: BC_ACTIVE_CELL                      = 0    !< Non BC, active cell.
 ! chimera BC, face face-center
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF                  = 20   !< Chimera face.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF_I0               = 21   !< Chimera face, centered at i0 face-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF_IN               = 22   !< Chimera face, centered at in face-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF_J0               = 23   !< Chimera face, centered at j0 face-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF_JN               = 24   !< Chimera face, centered at jn face-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF_K0               = 25   !< Chimera face, centered at k0 face-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XF_KN               = 26   !< Chimera face, centered at kn face-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF                  = 20   !< Chimera face.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF_I0               = 21   !< Chimera face, centered at i0 face-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF_IN               = 22   !< Chimera face, centered at in face-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF_J0               = 23   !< Chimera face, centered at j0 face-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF_JN               = 24   !< Chimera face, centered at jn face-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF_K0               = 25   !< Chimera face, centered at k0 face-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XF_KN               = 26   !< Chimera face, centered at kn face-center.
 ! chimera BC, cell
-integer(kind=I4P), parameter, public :: BC_CHIMERA_CELL                     = 27   !< Chimera cell inside domain.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_CELL_INT_WALL            = 28   !< Chimera cell internal wall.
+integer(I4P), parameter, public :: BC_CHIMERA_CELL                     = 27   !< Chimera cell inside domain.
+integer(I4P), parameter, public :: BC_CHIMERA_CELL_INT_WALL            = 28   !< Chimera cell internal wall.
 ! chimera BC, face cell-center
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC                  = 40   !< Chimera face.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC_I0               = 41   !< Chimera face, centered at i0 cell-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC_IN               = 42   !< Chimera face, centered at in cell-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC_J0               = 43   !< Chimera face, centered at j0 cell-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC_JN               = 44   !< Chimera face, centered at jn cell-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC_K0               = 45   !< Chimera face, centered at k0 cell-center.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_XC_KN               = 46   !< Chimera face, centered at kn cell-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC                  = 40   !< Chimera face.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC_I0               = 41   !< Chimera face, centered at i0 cell-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC_IN               = 42   !< Chimera face, centered at in cell-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC_J0               = 43   !< Chimera face, centered at j0 cell-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC_JN               = 44   !< Chimera face, centered at jn cell-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC_K0               = 45   !< Chimera face, centered at k0 cell-center.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_XC_KN               = 46   !< Chimera face, centered at kn cell-center.
 ! chimera BC, adjacent
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ                 = 60   !< Adjacent.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_I0              = 61   !< Adjacent along face i0.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_IN              = 62   !< Adjacent along face in.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_J0              = 63   !< Adjacent along face j0.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_JN              = 64   !< Adjacent along face jn.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_K0              = 65   !< Adjacent along face k0.
-integer(kind=I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_KN              = 66   !< Adjacent along face kn.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ                 = 60   !< Adjacent.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_I0              = 61   !< Adjacent along face i0.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_IN              = 62   !< Adjacent along face in.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_J0              = 63   !< Adjacent along face j0.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_JN              = 64   !< Adjacent along face jn.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_K0              = 65   !< Adjacent along face k0.
+integer(I4P), parameter, public :: BC_CHIMERA_FACE_ADJ_KN              = 66   !< Adjacent along face kn.
 ! chimera BC, edge
-integer(kind=I4P), parameter, public :: BC_CHIMERA_EDGE                     = 80   !< Edge.
+integer(I4P), parameter, public :: BC_CHIMERA_EDGE                     = 80   !< Edge.
+
+integer(I4P), parameter :: MAX_DONORS=8 !< Maximum number of donors for chimera-like BC.
 
 type :: block_object
    !<  Block class.
@@ -71,9 +74,6 @@ type :: block_object
    integer(I4P)              :: Nk=0              !< Number of cells in k direction.
    integer(I4P)              :: gc=2              !< Number of ghost cells.
    integer(I4P)              :: w=0               !< Block weight (work load).
-   integer(I4P)              :: nactive=0         !< Number of cells without BC, active cell.
-   integer(I4P)              :: nnatural=0        !< Number of cells with natural BC.
-   integer(I4P)              :: nchimera=0        !< Number of cells with chimera BC.
    real(R8P),    allocatable :: nodes(:,:,:,:)    !< Nodes coordinates.
    integer(I4P), allocatable :: icc(:,:,:)        !< Cell centered icc values.
    integer(I4P), allocatable :: tcc(:,:,:,:)      !< BC type and eventual index on chimera values [1:2,1-gc:ni,1-gc:nj,1-gc:nk].
@@ -115,9 +115,6 @@ contains
    self%Nk = 0
    self%gc = 2
    self%w  = 0
-   self%nactive  = 0
-   self%nnatural = 0
-   self%nchimera = 0
    if (allocated(self%nodes)) deallocate(self%nodes)
    if (allocated(self%icc)) deallocate(self%icc)
    if (allocated(self%tcc)) deallocate(self%tcc)
@@ -172,7 +169,9 @@ contains
    integer(I4P)                       :: i,j,k     !< Counter.
 
    associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc)
+   print*, 'cazzo ni,nj,nk,gc',ni,nj,nk,gc
       read(file_unit)(((icc(i,j,k),i=1-gc,Ni+gc),j=1-gc,Nj+gc),k=1-gc,Nk+gc)
+   print*, 'cazzo icc',count(icc>0.and.icc<BC_NATURAL_RCC_RESERVED_DATA)
    endassociate
    endsubroutine load_icc
 
@@ -193,73 +192,80 @@ contains
 
    subroutine parse_rcc(self, rcc)
    !< Parse global rcc and store in local tcc/chimera arrays.
-   class(block_object), intent(inout) :: self      !< Block data.
-   real(R4P),           intent(in)    :: rcc(1:)   !< rcc unstructured array.
-   integer(I4P)                       :: ndonors   !< Number of donors.
-   integer(I4P)                       :: i,j,k,n,p !< Counter.
+   class(block_object), intent(inout) :: self                 !< Block data.
+   real(R4P),           intent(in)    :: rcc(1:)              !< rcc unstructured array.
+   integer(I4P)                       :: nchimera             !< Number of chimera data.
+   integer(I4P)                       :: ndonors              !< Number of donors.
+   real(R4P)                          :: donors(5,MAX_DONORS) !< Chimera-like BC donors data.
+   integer(I4P)                       :: i,j,k,n,p            !< Counter.
+   logical, allocatable               :: on_rcc(:)
 
-   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc,&
-             nactive=>self%nactive,nnatural=>self%nnatural,nchimera=>self%nchimera)
+   do p=1, 25
+      print*, 'cazzo rcc aaaa ',p,rcc(p)
+   enddo
+
+   allocate(on_rcc(1:size(rcc,dim=1)))
+   on_rcc = .false.
+   associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc)
    if (allocated(self%chimera)) deallocate(self%chimera)
    self%tcc(1,:,:,:) = BC_ACTIVE_CELL ! set all cell type to active cell
+   self%tcc(2,:,:,:) = 0_I4P          ! set all cell pointer-to-chimera to 0
+   ! count chimera rcc elements of block and set blocks%tcc
    nchimera = 0
    do k=1-gc, Nk+gc
    do j=1-gc, Nj+gc
    do i=1-gc, Ni+gc
       p = icc(i,j,k)
-      if (p>0) then
+      if     (p>BC_NATURAL_RCC_RESERVED_DATA) then ! chimera-like BC
+         nchimera = nchimera + 1
+         call get_donors(p=p, rcc=rcc, ndonors=ndonors)
          self%tcc(1,i,j,k) = nint(rcc(p),I4P)
-         select case(nint(rcc(p),I4P))
-         case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
-            ! no additional data is necessary
-         case(BC_ACTIVE_CELL)
-            ! no additional data is necessary
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
-            ! for chimera BC it is necessary to store other data
-            nchimera = nchimera + 1
-            self%tcc(2,i,j,k) = nchimera
-            ndonors = nint(rcc(p+1),I4P)    ! donors number
-            nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
-         case default
-            ! print *, 'error: unknown tcc "',self%tcc(1,i,j,k),'", ab,i,j,k=',self%ab,i,j,k
-         endselect
+         self%tcc(2,i,j,k) = nchimera
+         nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
+      elseif (p>0.and.p<=BC_NATURAL_RCC_RESERVED_DATA) then ! natural BC
+         self%tcc(1,i,j,k) = nint(rcc(p),I4P)
       endif
    enddo
    enddo
    enddo
    if (nchimera>0) then
+      ! set blocks%tcc
       allocate(self%chimera(1:nchimera))
+      self%chimera = 0._R4P
       nchimera = 0
       do k=1-gc, Nk+gc
       do j=1-gc, Nj+gc
       do i=1-gc, Ni+gc
          p = icc(i,j,k)
-         if (p>0) then
-            select case(nint(rcc(p),I4P))
-            case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
-            case(BC_ACTIVE_CELL)
-            case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
-               nchimera = nchimera + 1
-               ndonors = nint(rcc(p+1),I4P)      ! donors number
-               self%chimera(nchimera) = rcc(p+1) ! donors number
-               do n=1, ndonors
-                  self%chimera(nchimera+1+5*(n-1)) = rcc(p+2+5*(n-1)) ! b
-                  self%chimera(nchimera+2+5*(n-1)) = rcc(p+3+5*(n-1)) ! i
-                  self%chimera(nchimera+3+5*(n-1)) = rcc(p+4+5*(n-1)) ! j
-                  self%chimera(nchimera+4+5*(n-1)) = rcc(p+5+5*(n-1)) ! k
-                  self%chimera(nchimera+5+5*(n-1)) = rcc(p+6+5*(n-1)) ! weight
-               enddo
-               nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
-            case default
-               write(stderr, *)'error: unknown tcc "',self%tcc(1,i,j,k),'", ab,i,j,k=',self%ab,i,j,k
-               stop
-            endselect
+         if     (p>BC_NATURAL_RCC_RESERVED_DATA) then  ! chimera-like BC
+            nchimera = nchimera + 1
+            call get_donors(p=p, rcc=rcc, ndonors=ndonors, donors=donors)
+            self%chimera(nchimera) = real(ndonors,R4P)
+            on_rcc(p  ) = .true.
+            on_rcc(p+1) = .true.
+            do n=1, ndonors
+               self%chimera(nchimera+1+5*(n-1)) = donors(1,n) ! b
+               self%chimera(nchimera+2+5*(n-1)) = donors(2,n) ! i
+               self%chimera(nchimera+3+5*(n-1)) = donors(3,n) ! j
+               self%chimera(nchimera+4+5*(n-1)) = donors(4,n) ! k
+               self%chimera(nchimera+5+5*(n-1)) = donors(5,n) ! weight
+               on_rcc(p+1+5*(n-1)+1) = .true.
+               on_rcc(p+1+5*(n-1)+2) = .true.
+               on_rcc(p+1+5*(n-1)+3) = .true.
+               on_rcc(p+1+5*(n-1)+4) = .true.
+               on_rcc(p+1+5*(n-1)+5) = .true.
+            enddo
+            nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
+         elseif (p>0.and.p<=BC_NATURAL_RCC_RESERVED_DATA) then ! natural BC
+            on_rcc(p) = .true.
          endif
       enddo
       enddo
       enddo
    endif
    endassociate
+   print*, 'cazzo block ',self%ab,'on_rcc elements      ',count(on_rcc)
+   print*, 'cazzo block ',self%ab,'on_rcc elements miss ',count(.not.on_rcc)
    endsubroutine parse_rcc
 
    pure subroutine sanitize_chimera(self, sb)
@@ -688,9 +694,6 @@ contains
                                lhs%Nk          = rhs%Nk
                                lhs%gc          = rhs%gc
                                lhs%w           = rhs%w
-                               lhs%nactive     = rhs%nactive
-                               lhs%nnatural    = rhs%nnatural
-                               lhs%nchimera    = rhs%nchimera
    if (allocated(rhs%nodes  )) lhs%nodes       = rhs%nodes
    if (allocated(rhs%icc    )) lhs%icc         = rhs%icc
    if (allocated(rhs%tcc    )) lhs%tcc         = rhs%tcc
@@ -846,6 +849,31 @@ contains
    endif
    endsubroutine create_blocks_list
 
+   pure subroutine get_donors(p, rcc, ndonors, donors)
+   !< Return donors data given pointer to rcc.
+   integer(I4P), intent(in)            :: p             !< Pointer to rcc.
+   real(R4P),    intent(in)            :: rcc(1:)       !< rcc unstructured array.
+   integer(I4P), intent(out)           :: ndonors       !< Number of donors.
+   real(R4P),    intent(out), optional :: donors(1:,1:) !< Donors data.
+   integer(I4P)                        :: n             !< Counter.
+
+   if (p<=BC_NATURAL_RCC_RESERVED_DATA) then
+      ndonors = 0
+      if (present(donors)) donors = 0._R4P
+      return
+   endif
+   ndonors = nint(rcc(p+1))
+   if (present(donors)) then
+      do n = 1, min(ndonors, size(donors,dim=2))
+         donors(1,n) = rcc(p + 1 + 5*(n-1) + 1)
+         donors(2,n) = rcc(p + 1 + 5*(n-1) + 2)
+         donors(3,n) = rcc(p + 1 + 5*(n-1) + 3)
+         donors(4,n) = rcc(p + 1 + 5*(n-1) + 4)
+         donors(5,n) = rcc(p + 1 + 5*(n-1) + 5)
+      enddo
+   endif
+   endsubroutine get_donors
+
    subroutine implode_blocks(blocks, rcc)
    !< Implode previously exploded blocks in order to use legacy Xnavis/Xall inputs, transitional debugging mode.
    type(block_object), intent(inout)              :: blocks(1:)    !< Blocks data.
@@ -856,62 +884,53 @@ contains
    integer(I4P)                                   :: b,i,j,k,n,o,p !< Counter.
 
    if (allocated(rcc)) deallocate(rcc)
-   ! count rcc elements and update blocks%icc
-   nchimera = 0
+   ! count rcc elements and set blocks%icc
+   nchimera = BC_NATURAL_RCC_RESERVED_DATA ! start from reserved natural BC data
    do b=1, size(blocks,dim=1)
       Ni = blocks(b)%Ni ; Nj = blocks(b)%Nj ; Nk = blocks(b)%Nk ; gc = blocks(b)%gc
       blocks(b)%icc = 0_I4P
       do k=1-gc, Nk+gc
       do j=1-gc, Nj+gc
       do i=1-gc, Ni+gc
-         select case(blocks(b)%tcc(1,i,j,k))
-         case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
-            nchimera = nchimera + 1          ! BC type
-            blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
-         case(BC_ACTIVE_CELL)
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
+         if     (blocks(b)%tcc(1,i,j,k)<0) then
+            blocks(b)%icc(i,j,k) = -blocks(b)%tcc(1,i,j,k) ! point to BC natural reserved elements
+         elseif (blocks(b)%tcc(1,i,j,k)>0) then
             nchimera = nchimera + 1          ! BC type
             blocks(b)%icc(i,j,k) = nchimera  ! update icc pointer
             nchimera = nchimera + 1          ! BC chimera donors
             p = blocks(b)%tcc(2,i,j,k)
             ndonors = nint(blocks(b)%chimera(p))
             nchimera = nchimera + ndonors*5  ! b,i,j,k,weight for each donor
-         case default
-            write(stderr, *)'error: unknown tcc "',blocks(b)%tcc(1,i,j,k),'", ab,i,j,k=',blocks(b)%ab,i,j,k
-            stop
-         endselect
+         endif
       enddo
       enddo
       enddo
    enddo
+   ! at least the natural BC reserved data is present
    allocate(rcc(1:nchimera))
-   ! construct global rcc
+   do p=1, BC_NATURAL_RCC_RESERVED_DATA
+      rcc(p) = -real(p,R4P)
+   enddo
+   ! set other elements of rcc
    do b=1, size(blocks,dim=1)
       Ni = blocks(b)%Ni ; Nj = blocks(b)%Nj ; Nk = blocks(b)%Nk ; gc = blocks(b)%gc
       do k=1-gc, Nk+gc
       do j=1-gc, Nj+gc
       do i=1-gc, Ni+gc
-         select case(blocks(b)%tcc(1,i,j,k))
-         case(BC_NATURAL_EXTRAPOLATED_ALT:BC_NATURAL_WALL)
-            p = blocks(b)%icc(i,j,k)
-            rcc(p) = real(blocks(b)%tcc(1,i,j,k),R4P) ! BC type
-         case(BC_ACTIVE_CELL)
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
+         if  (blocks(b)%tcc(1,i,j,k)>0) then
             p = blocks(b)%icc(i,j,k)
             o = blocks(b)%tcc(2,i,j,k)
-               rcc(p          ) = real(blocks(b)%tcc(1,i,j,k),R4P)    ! BC type
-               rcc(p+1        ) =      blocks(b)%chimera(o)           ! BC chimera donors
-            do n=1, nint(blocks(b)%chimera(o))                        ! for each donor
-               rcc(p+2+5*(n-1)) =      blocks(b)%chimera(o+1+5*(n-1)) ! b
-               rcc(p+3+5*(n-1)) =      blocks(b)%chimera(o+2+5*(n-1)) ! i
-               rcc(p+4+5*(n-1)) =      blocks(b)%chimera(o+3+5*(n-1)) ! j
-               rcc(p+5+5*(n-1)) =      blocks(b)%chimera(o+4+5*(n-1)) ! k
-               rcc(p+6+5*(n-1)) =      blocks(b)%chimera(o+5+5*(n-1)) ! weight
+            ndonors = nint(blocks(b)%chimera(o))
+               rcc(p            ) = real(blocks(b)%tcc(1,i,j,k),R4P) ! BC type
+               rcc(p+1          ) = real(ndonors,R4P)                ! BC chimera donors
+            do n=1, ndonors                                          ! for each donor
+               rcc(p+1+5*(n-1)+1) = blocks(b)%chimera(o+5*(n-1)+1)   ! b
+               rcc(p+1+5*(n-1)+2) = blocks(b)%chimera(o+5*(n-1)+2)   ! i
+               rcc(p+1+5*(n-1)+3) = blocks(b)%chimera(o+5*(n-1)+3)   ! j
+               rcc(p+1+5*(n-1)+4) = blocks(b)%chimera(o+5*(n-1)+4)   ! k
+               rcc(p+1+5*(n-1)+5) = blocks(b)%chimera(o+5*(n-1)+5)   ! weight
             enddo
-         case default
-            write(stderr, *)'error: unknown tcc "',blocks(b)%tcc(1,i,j,k),'", ab,i,j,k=',blocks(b)%ab,i,j,k
-            stop
-         endselect
+         endif
       enddo
       enddo
       enddo
@@ -1199,7 +1218,7 @@ call parse_command_line(fgrd=file_name_grd,ficc=file_name_icc,fpci=file_name_pro
                         ebn=exploded_basename,np=procs_number,mu=max_unbalance,mgl=mgl)
 
 if ((.not.is_file_found(file_name_grd)).or.(.not.is_file_found(file_name_icc))) then
-   write(stderr, "(A)")'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
+   write(stderr, '(A)')'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
                                    '"'//trim(adjustl(file_name_icc))//'" not found!'
    stop
 endif
@@ -1207,38 +1226,38 @@ endif
 allocate(processes(0:procs_number-1))
 call processes%initialize
 
-print *, 'load grd file ',trim(adjustl(file_name_grd))
+print '(A)', 'load grd file '//trim(adjustl(file_name_grd))
 call load_file_grd(file_name=file_name_grd,blocks=blocks,blocks_number=blocks_number)
 
-print *, 'load icc file ',trim(adjustl(file_name_icc))
+print '(A)', 'load icc file '//trim(adjustl(file_name_icc))
 call load_file_icc(file_name=file_name_icc,blocks=blocks,blocks_number=blocks_number,rcc=rcc)
-print *, 'finish load input files'
+print '(A)', 'finish load input files'
 
 ! parse global rcc
-print *, 'parse global rcc and create block-local-rcc'
+print '(A)', 'parse global rcc and create block-local-rcc'
 print '(A)', 'total chimera elements '//trim(str(size(rcc,dim=1)))
 do b=1, blocks_number
    call blocks(b)%parse_rcc(rcc=rcc)
-   print '(A)', 'block '//trim(str(b,.true.))//' chimera elements number: '//trim(str(size(blocks(b)%chimera,dim=1)))
+   print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
 enddo
-print *, 'finish parse global rcc'
+print '(A)', 'finish parse global rcc'
 
 ! load balancing
-print *, 'load balancing stats'
+print '(A)', 'load balancing stats'
 total_blocks_weight = 0
 do b=1, blocks_number
-   print *, '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blocks(b)%w,.true.))
+   print '(A)', '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blocks(b)%w,.true.))
    total_blocks_weight = total_blocks_weight + blocks(b)%w
 enddo
 ideal_proc_workload = total_blocks_weight / procs_number
-print *, 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
+print '(A)', 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
 
 call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
-print *, 'blocks list in decreasing-workload-order'
+print '(A)', 'blocks list in decreasing-workload-order'
 do b=1, blocks_number
    bb = blocks_list(b)
-   print *, '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blocks(bb)%w,.true.))//&
-            ' Ni,Nj,Nk: '//trim(str([blocks(bb)%Ni,blocks(bb)%Nj,blocks(bb)%Nk]))
+   print '(A)', '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blocks(bb)%w,.true.))//&
+                ' Ni,Nj,Nk: '//trim(str([blocks(bb)%Ni,blocks(bb)%Nj,blocks(bb)%Nk]))
 enddo
 
 ! assign blocks to processes
@@ -1250,21 +1269,21 @@ assign_blocks_loop : do while(allocated(blocks_list))
       call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
       call popout_blocks_list(blocks_list=blocks_list)
    else
-      print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
+      print '(A)', 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
       call blocks(b)%split(mgl=mgl, is_split_done=is_split_done, sb=sb)
       if (is_split_done) then
-         print *, '   block "'//trim(strz(b,9))//'" split'
-         print *, '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
-         print *, '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
-         print *, '      first block parents list      '//trim(str(sb(1)%parents,.true.))
-         print *, '      second block parents list     '//trim(str(sb(2)%parents,.true.))
-         print *, '      update blocks data'
+         print '(A)', '   block "'//trim(strz(b,9))//'" split'
+         print '(A)', '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
+         print '(A)', '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
+         print '(A)', '      first block parents list      '//trim(str(sb(1)%parents,.true.))
+         print '(A)', '      second block parents list     '//trim(str(sb(2)%parents,.true.))
+         print '(A)', '      update blocks data'
          ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
          call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
          call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
          call processes%initialize
       else
-         print *, 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
+         print '(A)', 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
          blocks(b)%proc = p
          call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
          call popout_blocks_list(blocks_list=blocks_list)
@@ -1272,26 +1291,29 @@ assign_blocks_loop : do while(allocated(blocks_list))
    endif
 enddo assign_blocks_loop
 
-print *, 'processes workload'
+print '(A)', 'processes workload'
 do p=0, procs_number-1
-print *, '  proc '//trim(strz(p,6))//&
-         ' unbalancing '//trim(str(processes(p)%unbalance))//&
-         '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
+print '(A)', '  proc '//trim(strz(p,6))//&
+             ' unbalancing '//trim(str(processes(p)%unbalance))//&
+             '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
 enddo
 call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
 
 if (save_exploded) then
-   print *, 'save exploded blocks'
+   print '(A)', 'save exploded blocks'
    do b=1, blocks_number
       call blocks(b)%save_block_file(basename=exploded_basename, tec=save_block_tecplot)
    enddo
 endif
 
 if (save_imploded) then
-   print *, 'implode exploded blocks'
+   print '(A)', 'implode exploded blocks'
    call implode_blocks(blocks=blocks, rcc=rcc)
    print '(A)', 'total chimera elements after implosion'//trim(str(size(rcc,dim=1)))
-   print *, 'save imploded blocks in legacy overset format (split and load-balanced)'
+   do b=1, blocks_number
+      print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
+   enddo
+   print '(A)', 'save imploded blocks in legacy overset format (split and load-balanced)'
    ! call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
    ! call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
 endif
@@ -1378,29 +1400,29 @@ contains
 
    subroutine print_help
    !< Print help message.
-   write(*, "(A)")'overset-exploded: overset post-processor, automatic blocks-splitting, load-balancing, blocks-explosion'
-   write(*, "(A)")'usage:'
-   write(*, "(A)")'   overset-exploded [args]'
-   write(*, "(A)")'args list:'
-   write(*, "(A)")'   -grd file_name_grd               => GRD file name, default "cc.01.grd"'
-   write(*, "(A)")'   -icc file_name_icc               => ICC file name, default "cc.01"'
-   write(*, "(A)")'   -proc-input file_name_proc_input => proc.input file name, default "proc.input"'
-   write(*, "(A)")'   -np processes_number             => number of processes for load balancing, default 1'
-   write(*, "(A)")'   -max-unbalance mu                => maximum processes unbalancing in percent, default 1%'
-   write(*, "(A)")'   -mgl mgl                         => multigrid level to be preserved, default 4'
-   write(*, "(A)")'   -tec                             => enable tecplot output for debug, default .false.'
-   write(*, "(A)")'   -save-imploded                   => save imploded blocks after explosion, default .false.'
-   write(*, "(A)")'   -save-exploded                   => save exploded blocks, default .false.'
-   write(*, "(A)")'   -exploded-basename               => exploded files basename, default "exploded-"'
-   write(*, "(A)")'   -h, --help                       => print this help message'
-   write(*, "(A)")'examples:'
-   write(*, "(A)")'   overset-exploded -np 32'
-   write(*, "(A)")'   overset-exploded -grd cc.02.grd -icc cc.02 -np 16'
-   write(*, "(A)")'   overset-exploded -np 16 -max-unbalance 4'
-   write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16'
-   write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16 -save-imploded'
-   write(*, "(A)")'   overset-exploded -np 16 -proc-input proc.input-pes16 -save-exploded'
-   write(*, "(A)")'   overset-exploded -grd cc.03.grd -icc cc.03 -np 2 -tec -max-unbalance 3'
+   write(*, '(A)')'overset-exploded: overset post-processor, automatic blocks-splitting, load-balancing, blocks-explosion'
+   write(*, '(A)')'usage:'
+   write(*, '(A)')'   overset-exploded [args]'
+   write(*, '(A)')'args list:'
+   write(*, '(A)')'   -grd file_name_grd               => GRD file name, default "cc.01.grd"'
+   write(*, '(A)')'   -icc file_name_icc               => ICC file name, default "cc.01"'
+   write(*, '(A)')'   -proc-input file_name_proc_input => proc.input file name, default "proc.input"'
+   write(*, '(A)')'   -np processes_number             => number of processes for load balancing, default 1'
+   write(*, '(A)')'   -max-unbalance mu                => maximum processes unbalancing in percent, default 1%'
+   write(*, '(A)')'   -mgl mgl                         => multigrid level to be preserved, default 4'
+   write(*, '(A)')'   -tec                             => enable tecplot output for debug, default .false.'
+   write(*, '(A)')'   -save-imploded                   => save imploded blocks after explosion, default .false.'
+   write(*, '(A)')'   -save-exploded                   => save exploded blocks, default .false.'
+   write(*, '(A)')'   -exploded-basename               => exploded files basename, default "exploded-"'
+   write(*, '(A)')'   -h, --help                       => print this help message'
+   write(*, '(A)')'examples:'
+   write(*, '(A)')'   overset-exploded -np 32'
+   write(*, '(A)')'   overset-exploded -grd cc.02.grd -icc cc.02 -np 16'
+   write(*, '(A)')'   overset-exploded -np 16 -max-unbalance 4'
+   write(*, '(A)')'   overset-exploded -np 16 -proc-input proc.input-pes16'
+   write(*, '(A)')'   overset-exploded -np 16 -proc-input proc.input-pes16 -save-imploded'
+   write(*, '(A)')'   overset-exploded -np 16 -proc-input proc.input-pes16 -save-exploded'
+   write(*, '(A)')'   overset-exploded -grd cc.03.grd -icc cc.03 -np 2 -tec -max-unbalance 3'
    endsubroutine print_help
 
    ! files procedures

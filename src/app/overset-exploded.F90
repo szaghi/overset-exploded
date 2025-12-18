@@ -140,23 +140,26 @@ contains
    endassociate
    endsubroutine alloc
 
-   subroutine load_dimensions(self, file_unit, ab)
+   subroutine load_dimensions(self, file_unit, ab, allocate_data)
    !< Load block dimensions from file.
    !<
    !< @note The file must be already open and the current record-index must be at the proper block dimensions record.
    !< If ab index is passed it is supposed that this the first time the dimensions is loaded from grd file, thus the block
    !< destroyed and allocated ex novo.
-   class(block_object), intent(inout)        :: self      !< Block data.
-   integer(I4P),        intent(in)           :: file_unit !< Logical unit of grd file.
-   integer(I4P),        intent(in), optional :: ab        !< Absolute block index.
+   class(block_object), intent(inout)        :: self          !< Block data.
+   integer(I4P),        intent(in)           :: file_unit     !< Logical unit of grd file.
+   integer(I4P),        intent(in), optional :: ab            !< Absolute block index.
+   logical,             intent(in), optional :: allocate_data !< Sentinel to trigger data allocation.
 
    if (present(ab)) call self%destroy
    read(file_unit, end=10, err=10) self%Ni,self%Nj,self%Nk,self%gc
    10 continue
    if (present(ab)) then
-      call self%alloc
       self%ab = ab
       self%w = self%weight()
+   endif
+   if (present(allocate_data)) then
+      if (allocate_data) call self%alloc
    endif
    endsubroutine load_dimensions
 
@@ -169,9 +172,7 @@ contains
    integer(I4P)                       :: i,j,k     !< Counter.
 
    associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc)
-   print*, 'cazzo ni,nj,nk,gc',ni,nj,nk,gc
-      read(file_unit)(((icc(i,j,k),i=1-gc,Ni+gc),j=1-gc,Nj+gc),k=1-gc,Nk+gc)
-   print*, 'cazzo icc',count(icc>0.and.icc<BC_NATURAL_RCC_RESERVED_DATA)
+   read(file_unit)(((icc(i,j,k),i=1-gc,Ni+gc),j=1-gc,Nj+gc),k=1-gc,Nk+gc)
    endassociate
    endsubroutine load_icc
 
@@ -198,14 +199,7 @@ contains
    integer(I4P)                       :: ndonors              !< Number of donors.
    real(R4P)                          :: donors(5,MAX_DONORS) !< Chimera-like BC donors data.
    integer(I4P)                       :: i,j,k,n,p            !< Counter.
-   logical, allocatable               :: on_rcc(:)
 
-   do p=1, 25
-      print*, 'cazzo rcc aaaa ',p,rcc(p)
-   enddo
-
-   allocate(on_rcc(1:size(rcc,dim=1)))
-   on_rcc = .false.
    associate(Ni=>self%Ni,Nj=>self%Nj,Nk=>self%Nk,gc=>self%gc,icc=>self%icc)
    if (allocated(self%chimera)) deallocate(self%chimera)
    self%tcc(1,:,:,:) = BC_ACTIVE_CELL ! set all cell type to active cell
@@ -229,7 +223,7 @@ contains
    enddo
    enddo
    if (nchimera>0) then
-      ! set blocks%tcc
+      ! set blocks%chimera
       allocate(self%chimera(1:nchimera))
       self%chimera = 0._R4P
       nchimera = 0
@@ -241,31 +235,20 @@ contains
             nchimera = nchimera + 1
             call get_donors(p=p, rcc=rcc, ndonors=ndonors, donors=donors)
             self%chimera(nchimera) = real(ndonors,R4P)
-            on_rcc(p  ) = .true.
-            on_rcc(p+1) = .true.
             do n=1, ndonors
                self%chimera(nchimera+1+5*(n-1)) = donors(1,n) ! b
                self%chimera(nchimera+2+5*(n-1)) = donors(2,n) ! i
                self%chimera(nchimera+3+5*(n-1)) = donors(3,n) ! j
                self%chimera(nchimera+4+5*(n-1)) = donors(4,n) ! k
                self%chimera(nchimera+5+5*(n-1)) = donors(5,n) ! weight
-               on_rcc(p+1+5*(n-1)+1) = .true.
-               on_rcc(p+1+5*(n-1)+2) = .true.
-               on_rcc(p+1+5*(n-1)+3) = .true.
-               on_rcc(p+1+5*(n-1)+4) = .true.
-               on_rcc(p+1+5*(n-1)+5) = .true.
             enddo
             nchimera = nchimera + ndonors*5 ! b,i,j,k,weight for each donor
-         elseif (p>0.and.p<=BC_NATURAL_RCC_RESERVED_DATA) then ! natural BC
-            on_rcc(p) = .true.
          endif
       enddo
       enddo
       enddo
    endif
    endassociate
-   print*, 'cazzo block ',self%ab,'on_rcc elements      ',count(on_rcc)
-   print*, 'cazzo block ',self%ab,'on_rcc elements miss ',count(.not.on_rcc)
    endsubroutine parse_rcc
 
    pure subroutine sanitize_chimera(self, sb)
@@ -864,7 +847,7 @@ contains
    endif
    ndonors = nint(rcc(p+1))
    if (present(donors)) then
-      do n = 1, min(ndonors, size(donors,dim=2))
+      do n = 1, ndonors
          donors(1,n) = rcc(p + 1 + 5*(n-1) + 1)
          donors(2,n) = rcc(p + 1 + 5*(n-1) + 2)
          donors(3,n) = rcc(p + 1 + 5*(n-1) + 3)
@@ -950,7 +933,7 @@ contains
    read(file_unit, end=10, err=10) blocks_number
    allocate(blocks(1:blocks_number))
    do b=1, blocks_number
-      call blocks(b)%load_dimensions(ab=b, file_unit=file_unit)
+      call blocks(b)%load_dimensions(file_unit=file_unit, ab=b, allocate_data=.true.)
    enddo
    do b=1, blocks_number
       call blocks(b)%load_nodes(file_unit=file_unit)
@@ -1123,6 +1106,7 @@ contains
    if (allocated(blocks_)) deallocate(blocks_)
    blocks_number = blocks_number + 1
    endsubroutine update_blocks
+
 endmodule oe_block_object
 
 module oe_process_object
@@ -1193,9 +1177,6 @@ integer(I4P)                      :: blocks_number        !< Number of blocks co
 type(block_object), allocatable   :: blocks(:)            !< Blocks data.
 integer(I4P)                      :: total_blocks_weight  !< Total blocks weight.
 real(R4P), allocatable            :: rcc(:)               !< rcc unstructured array.
-logical                           :: is_split_done        !< Sentinel to check is split has been done.
-type(block_object)                :: sb(2)                !< Split blocks.
-integer(I4P), allocatable         :: blocks_list(:)       !< Blocks (unassigned) list (decreasing-workload) ordered.
 integer(I4P)                      :: procs_number         !< Number of processes for load balancing.
 type(process_object), allocatable :: processes(:)         !< Processes data.
 integer(I4P)                      :: ideal_proc_workload  !< Ideal process weight for load balancing.
@@ -1226,78 +1207,23 @@ endif
 allocate(processes(0:procs_number-1))
 call processes%initialize
 
-print '(A)', 'load grd file '//trim(adjustl(file_name_grd))
-call load_file_grd(file_name=file_name_grd,blocks=blocks,blocks_number=blocks_number)
+! print '(A)', 'load grd file '//trim(adjustl(file_name_grd))
+! call load_file_grd(file_name=file_name_grd,blocks=blocks,blocks_number=blocks_number)
 
-print '(A)', 'load icc file '//trim(adjustl(file_name_icc))
-call load_file_icc(file_name=file_name_icc,blocks=blocks,blocks_number=blocks_number,rcc=rcc)
-print '(A)', 'finish load input files'
+! print '(A)', 'load icc file '//trim(adjustl(file_name_icc))
+! call load_file_icc(file_name=file_name_icc,blocks=blocks,blocks_number=blocks_number,rcc=rcc)
+! print '(A)', 'finish load input files'
 
 ! parse global rcc
-print '(A)', 'parse global rcc and create block-local-rcc'
-print '(A)', 'total chimera elements '//trim(str(size(rcc,dim=1)))
-do b=1, blocks_number
-   call blocks(b)%parse_rcc(rcc=rcc)
-   print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
-enddo
-print '(A)', 'finish parse global rcc'
+! print '(A)', 'parse global rcc and create block-local-rcc'
+! do b=1, blocks_number
+!    call blocks(b)%parse_rcc(rcc=rcc)
+!    print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
+! enddo
+! print '(A)', 'finish parse global rcc'
 
-! load balancing
-print '(A)', 'load balancing stats'
-total_blocks_weight = 0
-do b=1, blocks_number
-   print '(A)', '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blocks(b)%w,.true.))
-   total_blocks_weight = total_blocks_weight + blocks(b)%w
-enddo
-ideal_proc_workload = total_blocks_weight / procs_number
-print '(A)', 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
-
-call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
-print '(A)', 'blocks list in decreasing-workload-order'
-do b=1, blocks_number
-   bb = blocks_list(b)
-   print '(A)', '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blocks(bb)%w,.true.))//&
-                ' Ni,Nj,Nk: '//trim(str([blocks(bb)%Ni,blocks(bb)%Nj,blocks(bb)%Nk]))
-enddo
-
-! assign blocks to processes
-assign_blocks_loop : do while(allocated(blocks_list))
-   p = minloc(processes(0:)%w,dim=1)-1 ! process with minimum workload
-   b = blocks_list(1)                  ! first blocks in unassigned list, the current biggest block
-   if (processes(p)%w+blocks(b)%w<=ideal_proc_workload*(100._R8P+max_unbalance)/100._R8P) then
-      blocks(b)%proc = p
-      call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
-      call popout_blocks_list(blocks_list=blocks_list)
-   else
-      print '(A)', 'block "'//trim(strz(blocks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
-      call blocks(b)%split(mgl=mgl, is_split_done=is_split_done, sb=sb)
-      if (is_split_done) then
-         print '(A)', '   block "'//trim(strz(b,9))//'" split'
-         print '(A)', '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
-         print '(A)', '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
-         print '(A)', '      first block parents list      '//trim(str(sb(1)%parents,.true.))
-         print '(A)', '      second block parents list     '//trim(str(sb(2)%parents,.true.))
-         print '(A)', '      update blocks data'
-         ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
-         call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
-         call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
-         call processes%initialize
-      else
-         print '(A)', 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
-         blocks(b)%proc = p
-         call processes(p)%assign_block(ab=b, wb=blocks(b)%w, ideal_workload=ideal_proc_workload)
-         call popout_blocks_list(blocks_list=blocks_list)
-      endif
-   endif
-enddo assign_blocks_loop
-
-print '(A)', 'processes workload'
-do p=0, procs_number-1
-print '(A)', '  proc '//trim(strz(p,6))//&
-             ' unbalancing '//trim(str(processes(p)%unbalance))//&
-             '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
-enddo
-call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
+call balance_workload(file_name=file_name_grd)
+stop
 
 if (save_exploded) then
    print '(A)', 'save exploded blocks'
@@ -1318,6 +1244,84 @@ if (save_imploded) then
    ! call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
 endif
 contains
+   subroutine balance_workload(file_name)
+   !< Balance workload distributing blocks (eventually splitted) over processes.
+   !< From file grd (or icc) only the blocks dimensions are loaded, other data are not allocated.
+   character(*),       intent(in)  :: file_name     !< File name
+   integer(I4P)                    :: blocks_number !< Blocks number.
+   type(block_object), allocatable :: blks(:)       !< Blocks data.
+   integer(I4P)                    :: file_unit     !< File unit.
+   logical                         :: is_split_done !< Sentinel to check is split has been done.
+   type(block_object)              :: sb(2)         !< Split blocks.
+   integer(I4P), allocatable       :: blocks_list(:)!< Blocks (unassigned) list (decreasing-workload) ordered.
+   integer(I4P)                    :: b             !< Counter.
+
+   if (allocated(blks)) deallocate(blks)
+   open(newunit=file_unit, file=trim(adjustl(file_name)), form='unformatted', action='read')
+   read(file_unit, end=10, err=10) blocks_number
+   allocate(blks(1:blocks_number))
+   do b=1, blocks_number
+      call blks(b)%load_dimensions(file_unit=file_unit, ab=b)
+   enddo
+
+   ! load balancing
+   print '(A)', 'load balancing stats'
+   total_blocks_weight = 0
+   do b=1, blocks_number
+      print '(A)', '    block "'//trim(strz(b,9))//'" weight: '//trim(str(blks(b)%w,.true.))
+      total_blocks_weight = total_blocks_weight + blks(b)%w
+   enddo
+   ideal_proc_workload = total_blocks_weight / procs_number
+   print '(A)', 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
+
+   call create_blocks_list(blocks=blks, blocks_list=blocks_list)
+   print '(A)', 'blocks list in decreasing-workload-order'
+   do b=1, blocks_number
+      bb = blocks_list(b)
+      print '(A)', '  block "'//trim(strz(bb,9))//'" weight: '//trim(str(blks(bb)%w,.true.))//&
+                   ' Ni,Nj,Nk: '//trim(str([blks(bb)%Ni,blks(bb)%Nj,blks(bb)%Nk]))
+   enddo
+
+   ! assign blocks to processes
+   assign_blocks_loop : do while(allocated(blocks_list))
+      p = minloc(processes(0:)%w,dim=1)-1 ! process with minimum workload
+      b = blocks_list(1)                  ! first blocks in unassigned list, the current biggest block
+      if (processes(p)%w+blks(b)%w<=ideal_proc_workload*(100._R8P+max_unbalance)/100._R8P) then
+         blks(b)%proc = p
+         call processes(p)%assign_block(ab=b, wb=blks(b)%w, ideal_workload=ideal_proc_workload)
+         call popout_blocks_list(blocks_list=blocks_list)
+      else
+         print '(A)', 'block "'//trim(strz(blks(b)%ab,9))//'" must be split to be insert into process '//trim(strz(p,6))
+         call blks(b)%split(mgl=mgl, is_split_done=is_split_done, sb=sb)
+         if (is_split_done) then
+            print '(A)', '   block "'//trim(strz(b,9))//'" split'
+            print '(A)', '      first split block  (ni,nj,nk) '//trim(str([sb(1)%Ni,sb(1)%Nj,sb(1)%Nk]))
+            print '(A)', '      second split block (ni,nj,nk) '//trim(str([sb(2)%Ni,sb(2)%Nj,sb(2)%Nk]))
+            print '(A)', '      first block parents list      '//trim(str(sb(1)%parents,.true.))
+            print '(A)', '      second block parents list     '//trim(str(sb(2)%parents,.true.))
+            print '(A)', '      update blocks data'
+            ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
+            call update_blocks(blocks=blks, sb=sb, blocks_number=blocks_number)
+            call create_blocks_list(blocks=blks, blocks_list=blocks_list)
+            call processes%initialize
+         else
+            print '(A)', 'block "'//trim(strz(blks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
+            blks(b)%proc = p
+            call processes(p)%assign_block(ab=b, wb=blks(b)%w, ideal_workload=ideal_proc_workload)
+            call popout_blocks_list(blocks_list=blocks_list)
+         endif
+      endif
+   enddo assign_blocks_loop
+
+   print '(A)', 'processes workload'
+   do p=0, procs_number-1
+   print '(A)', '  proc '//trim(strz(p,6))//&
+                ' unbalancing '//trim(str(processes(p)%unbalance))//&
+                '% assigned blocks '//trim(str(processes(p)%blks(2:),.true.))
+   enddo
+   call save_proc_input(blocks=blks, file_name=file_name_proc_input)
+   endsubroutine balance_workload
+
    subroutine parse_command_line(fgrd,ficc,fpci,stec,simp,sexp,ebn,np,mu,mgl)
    !< Parse command line inputs.
    character(*), intent(out) :: fgrd      !< Grid file name.

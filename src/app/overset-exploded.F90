@@ -551,7 +551,7 @@ contains
       do j=1-gc, Nj+gc
       do i=1-gc, Ni+gc
          select case(bs%tcc(1,i,j,k))
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
             p = bs%tcc(2,i,j,k)
             ndonors = nint(chimera(p))
             nchimera = nchimera + 1 + ndonors*5 ! b,i,j,k,weight for each donor
@@ -566,23 +566,75 @@ contains
       do j=1-gc, Nj+gc
       do i=1-gc, Ni+gc
          select case(bs%tcc(1,i,j,k))
-         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN)
+         case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
             nchimera = nchimera + 1
             p = bs%tcc(2,i,j,k)               ! point to parent chimera array
             bs%tcc(2,i,j,k) = nchimera        ! point to new split block chimera array
             bs%chimera(nchimera) = chimera(p) ! assigno donors number
             do n=1, nint(chimera(p),I4P) ! b,i,j,k,weight for each donor
                o = p + 5*(n-1)
-               if (nint(chimera(o+1),R4P)>bs%ab+(1-sb_n)) then
-                  ! reference to a block subsequent to the split one, ab index must be shifted
+               ! Check if donor references the parent block (intra-block reference)
+               if (nint(chimera(o+1),R4P)==bs%ab+(1-sb_n)) then
+                  ! Intra-block reference: donor is in parent block being split
+                  ! Determine which sub-block the donor falls into
+                  select case(bs%split_dir)
+                  case(1) ! Split in i direction
+                     if (nint(chimera(o+2),R4P)>sb(1)%Ni) then
+                        ! Donor falls in sb(2)
+                        bs%chimera(nchimera+1) = real(bs%ab+(1-sb_n)+1,R4P)       ! Point to sb(2)%ab
+                        bs%chimera(nchimera+2) = chimera(o+2) - real(sb(1)%Ni,R4P) ! Adjust i index
+                        bs%chimera(nchimera+3) = chimera(o+3)                      ! j unchanged
+                        bs%chimera(nchimera+4) = chimera(o+4)                      ! k unchanged
+                     else
+                        ! Donor falls in sb(1)
+                        bs%chimera(nchimera+1) = real(bs%ab+(1-sb_n),R4P)         ! Point to sb(1)%ab
+                        bs%chimera(nchimera+2) = chimera(o+2)                      ! i unchanged
+                        bs%chimera(nchimera+3) = chimera(o+3)                      ! j unchanged
+                        bs%chimera(nchimera+4) = chimera(o+4)                      ! k unchanged
+                     endif
+                  case(2) ! Split in j direction
+                     if (nint(chimera(o+3),R4P)>sb(1)%Nj) then
+                        ! Donor falls in sb(2)
+                        bs%chimera(nchimera+1) = real(bs%ab+(1-sb_n)+1,R4P)       ! Point to sb(2)%ab
+                        bs%chimera(nchimera+2) = chimera(o+2)                      ! i unchanged
+                        bs%chimera(nchimera+3) = chimera(o+3) - real(sb(1)%Nj,R4P) ! Adjust j index
+                        bs%chimera(nchimera+4) = chimera(o+4)                      ! k unchanged
+                     else
+                        ! Donor falls in sb(1)
+                        bs%chimera(nchimera+1) = real(bs%ab+(1-sb_n),R4P)         ! Point to sb(1)%ab
+                        bs%chimera(nchimera+2) = chimera(o+2)                      ! i unchanged
+                        bs%chimera(nchimera+3) = chimera(o+3)                      ! j unchanged
+                        bs%chimera(nchimera+4) = chimera(o+4)                      ! k unchanged
+                     endif
+                  case(3) ! Split in k direction
+                     if (nint(chimera(o+4),R4P)>sb(1)%Nk) then
+                        ! Donor falls in sb(2)
+                        bs%chimera(nchimera+1) = real(bs%ab+(1-sb_n)+1,R4P)       ! Point to sb(2)%ab
+                        bs%chimera(nchimera+2) = chimera(o+2)                      ! i unchanged
+                        bs%chimera(nchimera+3) = chimera(o+3)                      ! j unchanged
+                        bs%chimera(nchimera+4) = chimera(o+4) - real(sb(1)%Nk,R4P) ! Adjust k index
+                     else
+                        ! Donor falls in sb(1)
+                        bs%chimera(nchimera+1) = real(bs%ab+(1-sb_n),R4P)         ! Point to sb(1)%ab
+                        bs%chimera(nchimera+2) = chimera(o+2)                      ! i unchanged
+                        bs%chimera(nchimera+3) = chimera(o+3)                      ! j unchanged
+                        bs%chimera(nchimera+4) = chimera(o+4)                      ! k unchanged
+                     endif
+                  endselect
+               elseif (nint(chimera(o+1),R4P)>bs%ab+(1-sb_n)) then
+                  ! Reference to a block subsequent to the split one, ab index must be shifted
                   bs%chimera(nchimera+1) = chimera(o+1) + 1
+                  bs%chimera(nchimera+2) = chimera(o+2)
+                  bs%chimera(nchimera+3) = chimera(o+3)
+                  bs%chimera(nchimera+4) = chimera(o+4)
                else
+                  ! Reference to a block before the split one, no change needed
                   bs%chimera(nchimera+1) = chimera(o+1)
+                  bs%chimera(nchimera+2) = chimera(o+2)
+                  bs%chimera(nchimera+3) = chimera(o+3)
+                  bs%chimera(nchimera+4) = chimera(o+4)
                endif
-               bs%chimera(nchimera+2) = chimera(o+2)
-               bs%chimera(nchimera+3) = chimera(o+3)
-               bs%chimera(nchimera+4) = chimera(o+4)
-               bs%chimera(nchimera+5) = chimera(o+5)
+               bs%chimera(nchimera+5) = chimera(o+5)  ! Weight always unchanged
                nchimera = nchimera + 5  ! increment inside loop for each donor
             enddo
          endselect
@@ -606,6 +658,67 @@ contains
       enddo
       enddo
       enddo
+      ! ! count chimera data of parent
+      ! nchimera = 0
+      ! do k=1-gc, Nk+gc
+      ! do j=1-gc, Nj+gc
+      ! do i=1-gc, Ni+gc
+      !    select case(bs%tcc(1,i,j,k))
+      !    case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
+      !       p = bs%tcc(2,i,j,k)
+      !       ndonors = nint(chimera(p))
+      !       nchimera = nchimera + 1 + ndonors*5 ! b,i,j,k,weight for each donor
+      !    endselect
+      ! enddo
+      ! enddo
+      ! enddo
+      ! allocate(bs%chimera(nchimera+nadj*6)) ! chimera data from self + new adjacent chimera data (1 donor)
+      ! ! assign old chimera data
+      ! nchimera = 0
+      ! do k=1-gc, Nk+gc
+      ! do j=1-gc, Nj+gc
+      ! do i=1-gc, Ni+gc
+      !    select case(bs%tcc(1,i,j,k))
+      !    case(BC_CHIMERA_FACE_XF:BC_CHIMERA_FACE_ADJ_KN,BC_CHIMERA_EDGE)
+      !       nchimera = nchimera + 1
+      !       p = bs%tcc(2,i,j,k)               ! point to parent chimera array
+      !       bs%tcc(2,i,j,k) = nchimera        ! point to new split block chimera array
+      !       bs%chimera(nchimera) = chimera(p) ! assigno donors number
+      !       do n=1, nint(chimera(p),I4P) ! b,i,j,k,weight for each donor
+      !          o = p + 5*(n-1)
+      !          if (nint(chimera(o+1),R4P)>bs%ab+(1-sb_n)) then
+      !             ! reference to a block subsequent to the split one, ab index must be shifted
+      !             bs%chimera(nchimera+1) = chimera(o+1) + 1
+      !          else
+      !             bs%chimera(nchimera+1) = chimera(o+1)
+      !          endif
+      !          bs%chimera(nchimera+2) = chimera(o+2)
+      !          bs%chimera(nchimera+3) = chimera(o+3)
+      !          bs%chimera(nchimera+4) = chimera(o+4)
+      !          bs%chimera(nchimera+5) = chimera(o+5)
+      !          nchimera = nchimera + 5  ! increment inside loop for each donor
+      !       enddo
+      !    endselect
+      ! enddo
+      ! enddo
+      ! enddo
+      ! ! assign new chimera-adjacent data
+      ! do k=1-gc, Nk+gc - (Nk+gc)*delta(3)
+      ! do j=1-gc, Nj+gc - (Nj+gc)*delta(2)
+      ! do i=1-gc, Ni+gc - (Ni+gc)*delta(1)
+      !    nchimera = nchimera + 1
+      !    bs%tcc(1,i+(Ni+gc)*delta(1)*(2-sb_n),j+(Nj+gc)*delta(2)*(2-sb_n),k+(Nk+gc)*delta(3)*(2-sb_n)) = BC_ADJ(bs%split_dir,sb_n)
+      !    bs%tcc(2,i+(Ni+gc)*delta(1)*(2-sb_n),j+(Nj+gc)*delta(2)*(2-sb_n),k+(Nk+gc)*delta(3)*(2-sb_n)) = nchimera
+      !    bs%chimera(nchimera  ) = 1._R4P
+      !    bs%chimera(nchimera+1) = real(ab_ob        ,R4P)
+      !    bs%chimera(nchimera+2) = real(i+gc*delta(1),R4P)
+      !    bs%chimera(nchimera+3) = real(j+gc*delta(2),R4P)
+      !    bs%chimera(nchimera+4) = real(k+gc*delta(3),R4P)
+      !    bs%chimera(nchimera+5) = 1._R4P
+      !    nchimera = nchimera + 5
+      ! enddo
+      ! enddo
+      ! enddo
       endassociate
       endsubroutine split_chimera
 
@@ -1068,9 +1181,9 @@ contains
    write(file_unit, *) ' block - group - body - processor [history of splits, parents list]'
    do b=1, blocks_number
       if (allocated(blocks(b)%parents)) then
-         write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc, blocks(b)%parents
+         write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc, '!', blocks(b)%parents
       else
-         write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc, ' original block, no splits'
+         write(file_unit,*) b, blocks(b)%group, blocks(b)%body, blocks(b)%proc, '! original block, no splits'
       endif
    enddo
    close(file_unit)
@@ -1095,7 +1208,6 @@ contains
       blocks(b)%ab = blocks(b)%ab + 1
    enddo
    ! create new blocks data
-   print*,'blocks number ', blocks_number
    allocate(blocks_(1:blocks_number+1))
    do b=1, sb(1)%ab - 1
       blocks_(b) = blocks(b)
@@ -1186,7 +1298,7 @@ interface strz
 endinterface
 contains
    ! public methods
-   subroutine balance_workload(file_name,mgl,max_unbalance,procs_number,processes,splits)
+   subroutine balance_workload(file_name,mgl,max_unbalance,procs_number,processes,splits,save_bsplit_par)
    !< Balance workload distributing blocks (eventually splitted) over processes.
    !< The balanced per-process blocks assignment is returned as well the eventually blocks-splits.
    !< From file grd (or icc) only the blocks dimensions are loaded, other data are not allocated.
@@ -1196,6 +1308,7 @@ contains
    integer(I4P),         intent(in)                 :: procs_number       !< Number of processes for load balancing.
    type(process_object), intent(inout)              :: processes(0:)      !< Processes data.
    integer(I4P),         intent(inout), allocatable :: splits(:)          !< Splits history.
+   logical,              intent(in), optional       :: save_bsplit_par    !< Sentinel to save bsplit.par.
    type(block_object), allocatable                  :: blocks(:)          !< Blocks data.
    integer(I4P)                                     :: blocks_number      !< Blocks number.
    integer(I4P)                                     :: file_unit          !< File unit.
@@ -1204,9 +1317,13 @@ contains
    logical                                          :: is_split_done      !< Sentinel to check is split has been done.
    type(block_object)                               :: sb(2)              !< Split blocks.
    integer(I4P), allocatable                        :: blocks_list(:)     !< Blocks (unassigned) list (decreasing-workload) ordered.
+   integer(I4P), allocatable                        :: splits_dir(:)      !< Splits direction history.
+   integer(I4P), allocatable                        :: splits_nijk(:)     !< Splits nijk history.
    integer(I4P)                                     :: b, bb, p           !< Counter.
 
-   splits = [0_I4P]
+   splits      = [0_I4P]
+   splits_dir  = [0_I4P]
+   splits_nijk = [0_I4P]
 
    ! load original blocks dimensions
    if (allocated(blocks)) deallocate(blocks)
@@ -1226,6 +1343,7 @@ contains
       total_blocks_weight = total_blocks_weight + blocks(b)%w
    enddo
    ideal_proc_workload = total_blocks_weight / procs_number
+   print '(A)', 'total work load "'//trim(str(total_blocks_weight))//'"'
    print '(A)', 'ideal work load for np "'//trim(strz(procs_number,6))//'" processes: '//trim(str(ideal_proc_workload,.true.))
 
    call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
@@ -1259,7 +1377,16 @@ contains
             call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
             call processes%initialize
             ! update splits history
-            splits = [splits, sb(1)%ab]
+            splits     = [splits, sb(1)%ab]
+            splits_dir = [splits, sb(1)%split_dir]
+            select case(sb(1)%split_dir)
+            case(1)
+               splits_nijk = [splits, sb(1)%ni]
+            case(2)
+               splits_nijk = [splits, sb(1)%nj]
+            case(3)
+               splits_nijk = [splits, sb(1)%nk]
+            endselect
          else
             print '(A)', 'block "'//trim(strz(blocks(b)%ab,9))//'" split failed, assigned anyway to process '//trim(strz(p,6))
             blocks(b)%proc = p
@@ -1269,9 +1396,13 @@ contains
       endif
    enddo assign_blocks_loop
    if (size(splits,dim=1)>1) then ! trim out first block set to 0 for convenience
-      splits = splits(2:)
+      splits      = splits(     2:)
+      splits_dir  = splits_dir( 2:)
+      splits_nijk = splits_nijk(2:)
    else ! no splits necessary, destroy splits history
       deallocate(splits)
+      deallocate(splits_dir)
+      deallocate(splits_nijk)
    endif
 
    print '(A)', 'processes workload'
@@ -1280,7 +1411,28 @@ contains
                    ' unbalancing '//trim(str(processes(p)%unbalance))//&
                    '% assigned blocks '//trim(str(processes(p)%blocks(2:),.true.))
    enddo
-   ! call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
+   if (present(save_bsplit_par)) then
+      if (save_bsplit_par) call save_file_bsplit_par
+   endif
+   contains
+      subroutine save_file_bsplit_par
+      !< Save file bsplit.par.
+      integer(I4P) :: file_unit !< File unit.
+      integer(I4P) :: s         !< Counter.
+
+      open(newunit=file_unit, file='bsplit.par', action='write', status='replace')
+      write(file_unit,'(A)') "'none' ! basename file solution"
+      write(file_unit,'(A)') "'cc'   ! basename grd file"
+      write(file_unit,'(A)') "'cc'   ! basename icc file"
+      write(file_unit,'(A)') trim(str(mgl))//" ! multigrid level"
+      write(file_unit,'(A)') "0 ! variables time n"
+      write(file_unit,'(A)') "0 ! variables time n-1"
+      write(file_unit,'(A)') "5 ! debug level"
+      do s=1, size(splits,dim=1)
+         write(file_unit,'(A)') trim(str([splits(s),splits_dir(s),splits_nijk(s)]))
+      enddo
+      close(file_unit)
+      endsubroutine save_file_bsplit_par
    endsubroutine balance_workload
 
    ! string procedures
@@ -1394,13 +1546,15 @@ enddo
 print '(A)', 'finish parse global rcc'
 
 call balance_workload(file_name=file_name_grd,mgl=mgl,max_unbalance=max_unbalance,procs_number=procs_number,&
-                      processes=processes,splits=splits)
+                      processes=processes,splits=splits,save_bsplit_par=.true.)
 if (allocated(splits)) then
    print '(A)', 'split blocks'
    do b=1, size(splits,dim=1)
+      print '(A)', '  block '//trim(str(splits(b),.true.))
       call blocks(splits(b))%split(mgl=mgl, is_split_done=is_split_done, sb=sb, split_data=.true.)
       if (is_split_done) then
          call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
+         print '(A)', '     new blocks number '//trim(str(blocks_number,.true.))
          ! free sb memory immediately after update_blocks copies the data
          call sb(1)%destroy
          call sb(2)%destroy
@@ -1410,7 +1564,14 @@ if (allocated(splits)) then
       endif
    enddo
 endif
-stop
+! update blocks to processes assignment
+do p=0, procs_number - 1
+   do b=1, size(processes(p)%blocks,dim=1)
+      bb = processes(p)%blocks(b)
+      if (bb>0) blocks(bb)%proc = p
+   enddo
+enddo
+call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
 
 if (save_exploded) then
    print '(A)', 'save exploded blocks'
@@ -1427,8 +1588,8 @@ if (save_imploded) then
       print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
    enddo
    print '(A)', 'save imploded blocks in legacy overset format (split and load-balanced)'
-   ! call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
-   ! call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
+   call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
+   call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
 endif
 contains
    subroutine parse_command_line(fgrd,ficc,fpci,stec,simp,sexp,ebn,np,mu,mgl)

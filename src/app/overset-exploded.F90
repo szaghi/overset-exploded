@@ -471,7 +471,7 @@ contains
    endassociate
    endsubroutine save_block_file
 
-   pure subroutine split(self, mgl, is_split_done, sb, split_data)
+   pure subroutine split(self, mgl, is_split_done, sb, split_data, use_cc_par)
    !< Split block. Split current block (if possible), along a the largest direction, in half: the first
    !< Block substitute current block, the other is added to blocks list.
    class(block_object), intent(in)           :: self          !< Block data.
@@ -479,11 +479,14 @@ contains
    logical,             intent(out)          :: is_split_done !< Sentinel to check is split has been done.
    type(block_object),  intent(out)          :: sb(2)         !< Split blocks.
    logical,             intent(in), optional :: split_data    !< Sentinel to split also data.
+   logical,             intent(in), optional :: use_cc_par    !< Sentinel to enable cc.par use.
    logical                                   :: split_data_   !< Sentinel to split also data, local var.
+   logical                                   :: use_cc_par_   !< Sentinel to enable cc.par use, local var.
    integer(I4P)                              :: nadj          !< Number of new adjacent-BC cells.
    integer(I4P)                              :: delta(3)      !< Directions deltas.
 
    split_data_ = .false. ; if (present(split_data)) split_data_ = split_data
+   use_cc_par_ = .false. ; if (present(use_cc_par)) use_cc_par_ = use_cc_par
    is_split_done = .false.
    call sb(1)%destroy
    call sb(2)%destroy
@@ -513,10 +516,14 @@ contains
          ! split data
          call sb(1)%alloc
          call sb(2)%alloc
-         call split_nodes(nodes=self%nodes,delta=delta,gc=self%gc,sb=sb)
-         call split_tcc(tcc=self%tcc,delta=delta,gc=self%gc,sb=sb)
-         call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=1,ab_ob=sb(2)%ab,bs=sb(1))
-         call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=2,ab_ob=sb(1)%ab,bs=sb(2))
+         call split_nodes(gc=self%gc,nodes=self%nodes,delta=delta,sb=sb)
+         if (use_cc_par_) then
+            call split_patches(patches=self%patches,delta=delta,sb=sb)
+         else
+            call split_tcc(tcc=self%tcc,delta=delta,gc=self%gc,sb=sb)
+            call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=1,ab_ob=sb(2)%ab,bs=sb(1))
+            call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=2,ab_ob=sb(1)%ab,bs=sb(2))
+         endif
       endif
    endif
    contains
@@ -775,11 +782,135 @@ contains
       endassociate
       endsubroutine split_chimera
 
-      pure subroutine split_nodes(nodes,delta,gc,sb)
+      pure subroutine split_patches(patches,delta,sb)
+      !< Split patches.
+      type(patch_object), intent(in)    :: patches(1:) !< Patches on block faces (6 patches or more if faces have split patches).
+      integer(I4P),       intent(in)    :: delta(3)    !< Deltas.
+      type(block_object), intent(inout) :: sb(2)       !< Split blocks.
+      integer(I4P)                      :: p1, p2, p   !< Counter.
+
+  ! logical      :: is_connection=.false. !< Flag to inquire is the patch defines a connection.
+  ! integer(I4P) :: patch_index=0         !< Patch index, local numeration.
+  ! integer(I4P) :: block_index=0         !< Block to which patch belongs, local numeration.
+  ! integer(I4P) :: face_index=0          !< Face index in the overset convention: Imin=>1, Imax=2,Jmin=3, Jmax=4, Kmin=5, Kmax=6.
+  ! integer(I4P) :: boundary_condition=0  !< Boundary condition (or IJK orientation) in the overset convention.
+  ! integer(I4P) :: connect_family=0      !< Index of connected patch or family index of the patch.
+  ! integer(I4P) :: ijk_extents(1:6)=&
+  !                 [0,0,0,0,0,0]         !< IJK extents of the patch in the overset convention: Imin, Imax, Jmin, Jmax, Kmin, Kmax.
+      sb(1)%patches = patches
+      sb(2)%patches = patches
+      p1 = 0
+      p2 = 0
+      if     (delta(1)==1_I4P) then
+         do p=1, size(patches,dim=1)
+            if     (patches(p)%face_index==1_I4P) then
+               ! patch is YZ min
+               p1 = p1 + 1
+               sb(1)%patches(p1) = patches(p)
+               ! assuming only 6 patch ever, the following is not general enough
+               sb(1)%patches(p1+1) = patches(p)
+               sb(1)%patches(p1+1)%face_index = 2_I4P
+               sb(1)%patches(p1+1)%boundary_condition = -1 ! to be implemented
+               sb(1)%patches(p1+1)%connect_family = sb(2)%ab
+               sb(1)%patches(p1+1)%ijk_extents(1) = sb(1)%ni
+               sb(1)%patches(p1+1)%ijk_extents(2) = sb(1)%ni
+            elseif (patches(p)%face_index==2_I4P) then
+               ! patch is YZ max
+               p2 = p2 + 1
+               sb(2)%patches(p2) = patches(p)
+               ! assuming only 6 patch ever, the following is not general enough
+               sb(2)%patches(p1-1) = patches(p)
+               sb(2)%patches(p1-1)%face_index = 1_I4P
+               sb(2)%patches(p1-1)%boundary_condition = -1 ! to be implemented
+               sb(2)%patches(p1-1)%connect_family = sb(1)%ab
+               sb(2)%patches(p1-1)%ijk_extents(1) = 0_I4P
+               sb(2)%patches(p1-1)%ijk_extents(2) = 0_I4P
+            else
+               ! patch is XY or XZ
+               p1 = p1 + 1
+               sb(1)%patches(p1) = patches(p)
+               sb(1)%patches(p1)%ijk_extents(2) = sb(1)%ni
+               p2 = p2 + 1
+               sb(2)%patches(p2) = patches(p)
+               sb(2)%patches(p2)%ijk_extents(2) = sb(2)%ni
+            endif
+         enddo
+      elseif (delta(2)==1_I4P) then
+         do p=1, size(patches,dim=1)
+            if     (patches(p)%face_index==3_I4P) then
+               ! patch is XZ min
+               p1 = p1 + 1
+               sb(1)%patches(p1) = patches(p)
+               ! assuming only 6 patch ever, the following is not general enough
+               sb(1)%patches(p1+1) = patches(p)
+               sb(1)%patches(p1+1)%face_index = 4_I4P
+               sb(1)%patches(p1+1)%boundary_condition = -1 ! to be implemented
+               sb(1)%patches(p1+1)%connect_family = sb(2)%ab
+               sb(1)%patches(p1+1)%ijk_extents(1) = sb(1)%nj
+               sb(1)%patches(p1+1)%ijk_extents(2) = sb(1)%nj
+            elseif (patches(p)%face_index==4_I4P) then
+               ! patch is XZ max
+               p2 = p2 + 1
+               sb(2)%patches(p2) = patches(p)
+               ! assuming only 6 patch ever, the following is not general enough
+               sb(2)%patches(p1-1) = patches(p)
+               sb(2)%patches(p1-1)%face_index = 3_I4P
+               sb(2)%patches(p1-1)%boundary_condition = -1 ! to be implemented
+               sb(2)%patches(p1-1)%connect_family = sb(1)%ab
+               sb(2)%patches(p1-1)%ijk_extents(1) = 0_I4P
+               sb(2)%patches(p1-1)%ijk_extents(2) = 0_I4P
+            else
+               ! patch is XY or YZ
+               p1 = p1 + 1
+               sb(1)%patches(p1) = patches(p)
+               sb(1)%patches(p1)%ijk_extents(4) = sb(1)%nj
+               p2 = p2 + 1
+               sb(2)%patches(p2) = patches(p)
+               sb(2)%patches(p2)%ijk_extents(4) = sb(2)%nj
+            endif
+         enddo
+      elseif (delta(3)==1_I4P) then
+         do p=1, size(patches,dim=1)
+            if     (patches(p)%face_index==5_I4P) then
+               ! patch is XY min
+               p1 = p1 + 1
+               sb(1)%patches(p1) = patches(p)
+               ! assuming only 6 patch ever, the following is not general enough
+               sb(1)%patches(p1+1) = patches(p)
+               sb(1)%patches(p1+1)%face_index = 6_I4P
+               sb(1)%patches(p1+1)%boundary_condition = -1 ! to be implemented
+               sb(1)%patches(p1+1)%connect_family = sb(2)%ab
+               sb(1)%patches(p1+1)%ijk_extents(1) = sb(1)%nk
+               sb(1)%patches(p1+1)%ijk_extents(2) = sb(1)%nk
+            elseif (patches(p)%face_index==6_I4P) then
+               ! patch is XY max
+               p2 = p2 + 1
+               sb(2)%patches(p2) = patches(p)
+               ! assuming only 6 patch ever, the following is not general enough
+               sb(2)%patches(p1-1) = patches(p)
+               sb(2)%patches(p1-1)%face_index = 5_I4P
+               sb(2)%patches(p1-1)%boundary_condition = -1 ! to be implemented
+               sb(2)%patches(p1-1)%connect_family = sb(1)%ab
+               sb(2)%patches(p1-1)%ijk_extents(1) = 0_I4P
+               sb(2)%patches(p1-1)%ijk_extents(2) = 0_I4P
+            else
+               ! patch is XZ or YZ
+               p1 = p1 + 1
+               sb(1)%patches(p1) = patches(p)
+               sb(1)%patches(p1)%ijk_extents(6) = sb(1)%nj
+               p2 = p2 + 1
+               sb(2)%patches(p2) = patches(p)
+               sb(2)%patches(p2)%ijk_extents(6) = sb(2)%nj
+            endif
+         enddo
+      endif
+      endsubroutine split_patches
+
+      pure subroutine split_nodes(gc,nodes,delta,sb)
       !< Split nodes.
-      integer(I4P),       intent(in)    :: delta(3)                    !< Deltas.
       integer(I4P),       intent(in)    :: gc                          !< Number of ghost cells.
       real(R8P),          intent(in)    :: nodes(1:,0-gc:,0-gc:,0-gc:) !< Nodes coordinates.
+      integer(I4P),       intent(in)    :: delta(3)                    !< Deltas.
       type(block_object), intent(inout) :: sb(2)                       !< Split blocks.
       integer(I4P)                      :: i,j,k                       !< Counter.
 
@@ -1397,11 +1528,12 @@ contains
    close(file_unit)
    endsubroutine save_proc_input
 
-   subroutine update_blocks(blocks, sb, blocks_number)
+   subroutine update_blocks(blocks, sb, blocks_number, use_cc_par)
    !< Update blocks data after a block split.
    type(block_object), intent(inout), allocatable :: blocks(:)     !< Blocks data.
    type(block_object), intent(in)                 :: sb(1:)        !< Split blocks.
    integer(I4P),       intent(out)                :: blocks_number !< Blocks number.
+   logical,            intent(in)                 :: use_cc_par    !< Use cc.par instead of icc.
    type(block_object), allocatable                :: blocks_(:)    !< New blocks data.
    integer(I4P)                                   :: b             !< Counter.
 
@@ -1409,7 +1541,7 @@ contains
    ! sanitize old chimera data
    do b=1, blocks_number
       if (b==sb(1)%ab) cycle ! split block does not need to be santized, it is replaced by sb
-      call blocks(b)%sanitize_chimera(sb=sb)
+      if (.not.use_cc_par) call blocks(b)%sanitize_chimera(sb=sb)
    enddo
    ! ab shift
    do b=sb(2)%ab, blocks_number
@@ -1468,8 +1600,9 @@ contains
    integer(I4P)                                   :: face_lo, face_hi  !< Face indices for split direction.
    integer(I4P)                                   :: Nj_face, Nk_face  !< Face dimensions for new internal patches.
    integer(I4P)                                   :: dim_perp1, dim_perp2 !< Perpendicular dimension sizes.
-   integer(I4P)                                   :: pc            !< Patches count per block.
-   integer(I4P), allocatable                      :: patches_count(:) !< Patches count per block.
+   integer(I4P)                                   :: pc                   !< Patches count per block.
+   integer(I4P), allocatable                      :: patches_count(:)     !< Patches count per block.
+   integer(I4P), allocatable                      :: pos_to_global(:)     !< Mapping: new_patches position -> global index.
 
    nb = size(blocks, dim=1)
 
@@ -1512,21 +1645,24 @@ contains
       allocate(new_patches(np_total * 2 + 2))
       new_count = 0
 
+      ! Two-pass approach: process block-B patches first (which may mark partners as sentinels),
+      ! then copy non-B patches. This avoids order-dependent sentinel issues.
+      ! Pass 1: process patches on block B
       do ip = 1, np_total
          if (all_patches(ip)%block_index == B) then
-            ! This patch belongs to the block being split
             call distribute_patch_to_children(all_patches(ip), d, Ns1, Nd, B, face_lo, face_hi, &
                                               new_patches, new_count, &
                                               all_patches, np_total)
-         else
-            ! Patch on other block: just copy, shift block_index if needed
+         endif
+      enddo
+      ! Pass 2: copy non-B patches, skipping sentinels (block_index set to -1 by split_partner_patch)
+      do ip = 1, np_total
+         if (all_patches(ip)%block_index /= B .and. all_patches(ip)%block_index > 0) then
             new_count = new_count + 1
             new_patches(new_count) = all_patches(ip)
             if (new_patches(new_count)%block_index > B) then
                new_patches(new_count)%block_index = new_patches(new_count)%block_index + 1
             endif
-            ! Shift connect_family partner's block reference if it's a connection
-            ! (partner references are by patch index, not block, so this is handled later in renumbering)
          endif
       enddo
 
@@ -1569,22 +1705,10 @@ contains
       ! Fix cross-link for child-1 internal patch
       new_patches(p_idx)%connect_family = new_count
 
-      ! Renumber all patches sequentially and fix connect_family references
-      ! First, build old-to-new index mapping for connect_family
-      do ip = 1, new_count
-         new_patches(ip)%patch_index = ip
-      enddo
-      ! connect_family references are already using indices into new_patches for new patches
-      ! For patches copied from all_patches, connect_family still references old patch indices
-      ! We need to update them
-
-      ! Build mapping from old patch_index to new position
-      ! old patches that weren't split keep their connect_family pointing to old indices
-      ! For split patches, their partners were also split, so the references need updating
-      ! Since we process connect_family as symmetric pairs, we handle this by:
-      ! 1. For non-connection patches, connect_family <= 0, no update needed
-      ! 2. For connection patches that weren't on block B, their partner index needs remapping
-      ! The simplest approach: rebuild connect_family based on patch_index stored in each patch
+      ! Renumber connect_family references and assign sequential patch_index.
+      ! NOTE: do NOT reassign patch_index before this call - renumber_connect_families
+      ! needs the old patch_index values to build the old-to-new mapping.
+      ! Pre-linked patches (from split_partner_patch) have patch_index=0 and are skipped.
       call renumber_connect_families(new_patches, new_count)
 
       ! Insert child 2 block in blocks array
@@ -1646,6 +1770,38 @@ contains
          endif
       enddo
       deallocate(patches_count)
+
+      ! Remap connect_family from new_patches positions to global block-by-block indices.
+      ! The patches were redistributed to blocks, but their connect_family still references
+      ! positions in new_patches. The global ordering (block by block) differs from new_patches order.
+      allocate(pos_to_global(new_count), source=0)
+      pc = 0
+      do b_idx = 1, nb
+         if (.not.allocated(blocks(b_idx)%patches)) cycle
+         do jp = 1, size(blocks(b_idx)%patches)
+            pc = pc + 1
+            if (blocks(b_idx)%patches(jp)%patch_index >= 1 .and. &
+                blocks(b_idx)%patches(jp)%patch_index <= new_count) then
+               pos_to_global(blocks(b_idx)%patches(jp)%patch_index) = pc
+            endif
+         enddo
+      enddo
+      ! Update connect_family using the mapping, and assign final sequential patch_index
+      pc = 0
+      do b_idx = 1, nb
+         if (.not.allocated(blocks(b_idx)%patches)) cycle
+         do jp = 1, size(blocks(b_idx)%patches)
+            pc = pc + 1
+            if (blocks(b_idx)%patches(jp)%is_connection .and. &
+                blocks(b_idx)%patches(jp)%connect_family >= 1 .and. &
+                blocks(b_idx)%patches(jp)%connect_family <= new_count) then
+               blocks(b_idx)%patches(jp)%connect_family = &
+                  pos_to_global(blocks(b_idx)%patches(jp)%connect_family)
+            endif
+            blocks(b_idx)%patches(jp)%patch_index = pc
+         enddo
+      enddo
+      deallocate(pos_to_global)
 
       deallocate(all_patches)
       deallocate(new_patches)
@@ -1820,7 +1976,6 @@ contains
       else
          new_patches(new_count)%ijk_extents(p_d_lo) = split_pos
       endif
-      ! connect_family will be resolved during renumbering
 
       ! Partner part 2: connects to child 2 of B (at B+1)
       new_count = new_count + 1
@@ -1833,6 +1988,18 @@ contains
       else
          new_patches(new_count)%ijk_extents(p_d_hi) = split_pos
       endif
+
+      ! Set up direct cross-links between the 4 split patches.
+      ! child1 <-> partner_part1, child2 <-> partner_part2
+      new_patches(child1_pidx)%connect_family  = new_count - 1  ! partner part 1
+      new_patches(child2_pidx)%connect_family  = new_count      ! partner part 2
+      new_patches(new_count - 1)%connect_family = child1_pidx   ! child 1
+      new_patches(new_count)%connect_family     = child2_pidx   ! child 2
+      ! Mark all 4 as pre-linked (patch_index=0) so renumber_connect_families skips them
+      new_patches(child1_pidx)%patch_index  = 0
+      new_patches(child2_pidx)%patch_index  = 0
+      new_patches(new_count - 1)%patch_index = 0
+      new_patches(new_count)%patch_index     = 0
 
       ! Mark original partner patch so it won't be copied in the main loop
       all_patches(partner_idx)%block_index = -1  ! sentinel to skip
@@ -1871,126 +2038,71 @@ contains
 
       subroutine renumber_connect_families(patches, n)
       !< Renumber connect_family references after patch splitting.
-      !< Uses a two-pass approach:
-      !< 1. Build mapping from old patch_index to new position(s)
-      !< 2. Update connect_family using the mapping
+      !< Patches with patch_index==0 are "pre-linked" (their connect_family already points
+      !< to the correct position in the patches array) and are skipped during remapping.
+      !< Other patches have connect_family pointing to old patch indices that need remapping.
       type(patch_object), intent(inout) :: patches(:) !< Patches array.
       integer(I4P),       intent(in)    :: n          !< Number of patches.
       integer(I4P)                      :: ip         !< Counter.
       integer(I4P)                      :: old_idx    !< Old patch index.
       integer(I4P)                      :: cf         !< Connect family.
       integer(I4P)                      :: max_old    !< Maximum old patch index.
-      integer(I4P), allocatable         :: old_to_new(:,:) !< Mapping: old_to_new(1:2, old_idx).
-      integer(I4P), allocatable         :: old_count(:)    !< Count of new patches per old index.
+      integer(I4P), allocatable         :: old_to_new(:) !< Mapping: old patch index -> new position.
+      integer(I4P), allocatable         :: saved_old(:)  !< Saved old patch indices.
 
-      ! Find maximum old patch index
+      ! Save old patch indices before reassignment
+      allocate(saved_old(n))
+      do ip = 1, n
+         saved_old(ip) = patches(ip)%patch_index
+      enddo
+
+      ! Find maximum old patch index (only from non-pre-linked patches)
       max_old = 0
       do ip = 1, n
-         if (patches(ip)%patch_index > 0 .and. patches(ip)%patch_index /= ip) then
-            ! This patch has an old index different from its position
-            if (patches(ip)%patch_index > max_old) max_old = patches(ip)%patch_index
-         endif
+         if (saved_old(ip) > max_old) max_old = saved_old(ip)
       enddo
       if (max_old == 0) max_old = n
 
-      ! Build old-to-new mapping (each old index can map to at most 2 new indices due to splitting)
-      allocate(old_to_new(2, max_old), source=0)
-      allocate(old_count(max_old), source=0)
-
+      ! Build old-to-new mapping: each non-pre-linked patch maps its old index to its new position.
+      ! With pre-linking, each old index should map to exactly one new position.
+      allocate(old_to_new(max_old), source=0)
       do ip = 1, n
-         old_idx = patches(ip)%patch_index
+         old_idx = saved_old(ip)
          if (old_idx >= 1 .and. old_idx <= max_old) then
-            if (old_count(old_idx) < 2) then
-               old_count(old_idx) = old_count(old_idx) + 1
-               old_to_new(old_count(old_idx), old_idx) = ip
-            endif
+            old_to_new(old_idx) = ip
          endif
       enddo
 
-      ! Now assign sequential patch_index
+      ! Assign sequential patch_index
       do ip = 1, n
          patches(ip)%patch_index = ip
       enddo
 
       ! Update connect_family references
-      ! For connection patches, connect_family points to a partner patch by old index
-      ! We need to find the correct new partner
       do ip = 1, n
          if (.not. patches(ip)%is_connection) cycle
+         if (saved_old(ip) == 0) cycle  ! pre-linked patch, connect_family already correct
          cf = patches(ip)%connect_family
          if (cf < 1 .or. cf > max_old) cycle
-         if (old_count(cf) == 1) then
-            ! Partner wasn't split, simple remap
-            patches(ip)%connect_family = old_to_new(1, cf)
-         elseif (old_count(cf) == 2) then
-            ! Partner was split into two patches
-            ! We need to figure out which sub-partner connects to us
-            ! Use block matching: the sub-partner on the same side should connect
-            ! For a split partner, one connects to child 1 (block B) and one to child 2 (B+1)
-            ! Match by checking which partner references our block
-            call find_matching_partner(patches, ip, old_to_new(1,cf), old_to_new(2,cf))
+         if (old_to_new(cf) > 0) then
+            patches(ip)%connect_family = old_to_new(cf)
          endif
       enddo
 
+      deallocate(saved_old)
       deallocate(old_to_new)
-      deallocate(old_count)
       endsubroutine renumber_connect_families
-
-      subroutine find_matching_partner(patches, my_idx, partner1, partner2)
-      !< Find which of two split partner patches matches the given patch.
-      !< Match by checking mutual extent compatibility.
-      type(patch_object), intent(inout) :: patches(:)  !< Patches array.
-      integer(I4P),       intent(in)    :: my_idx      !< Index of the patch needing partner resolution.
-      integer(I4P),       intent(in)    :: partner1    !< First candidate partner.
-      integer(I4P),       intent(in)    :: partner2    !< Second candidate partner.
-      integer(I4P)                      :: my_block    !< My block index.
-
-      my_block = patches(my_idx)%block_index
-
-      ! The partner whose connect_family (old) pointed to our old index is our match
-      ! Since both partners inherited the same connect_family from the original,
-      ! we use block_index to disambiguate:
-      ! The original patch on block B was split. Child-1 stays at B, child-2 goes to B+1.
-      ! The partner patches should reference the corresponding child.
-      ! Partner-part-1 connects to child-1 (block B of the split)
-      ! Partner-part-2 connects to child-2 (block B+1 of the split)
-
-      ! Check if my_block matches what partner1 or partner2 expect
-      ! The simplest heuristic: partner1 was added first (connects to child 1),
-      ! partner2 was added second (connects to child 2)
-      ! Match by checking if my block is the lower or higher of the two children
-      if (patches(my_idx)%block_index <= patches(partner1)%block_index .or. &
-          patches(my_idx)%block_index <= patches(partner2)%block_index) then
-         ! Try to match based on which partner was listed first (child 1) vs second (child 2)
-         ! Partner1 connects to child 1 (lower block index among children)
-         ! Partner2 connects to child 2 (higher block index among children)
-         ! If my patch is on the lower child block, use partner1; otherwise partner2
-         ! But actually we need a more robust check using the old connect_family
-      endif
-
-      ! Robust approach: assign partner1 to the first match and partner2 to the second
-      ! Partner1 was created for child-1 of the split, partner2 for child-2
-      ! The patches in new_patches that come from child-1 are on block B (lower)
-      ! The patches from child-2 are on block B+1 (higher)
-      ! So: match the partner that corresponds to our block's child number
-
-      ! Actually, the cleanest approach: partner1 and partner2 each get one of the two
-      ! split patches. We assign:
-      patches(my_idx)%connect_family = partner1
-      ! The other split patch will get partner2 when it's processed
-      endsubroutine find_matching_partner
    endsubroutine replay_splits_on_patches
 
    subroutine save_file_cc_par(file_name, cc_par, blocks, boxes)
    !< Save file cc.par.
-   character(*),        intent(in) :: file_name !< File name.
-   type(cc_par_object), intent(in) :: cc_par    !< File cc.par handler.
-   type(block_object),  intent(in) :: blocks(:) !< Blocks data.
-   type(box_object),    intent(in), allocatable :: boxes(:) !< Boxes data.
-   integer(I4P)                    :: file_unit !< File unit.
-   integer(I4P)                    :: blocks_number  !< Blocks number.
-   integer(I4P)                    :: patches_number !< Patches number.
-   integer(I4P)                    :: boxes_number   !< Boxes number.
+   character(*),        intent(in)              :: file_name      !< File name.
+   type(cc_par_object), intent(in)              :: cc_par         !< File cc.par handler.
+   type(block_object),  intent(in)              :: blocks(:)      !< Blocks data.
+   type(box_object),    intent(in), allocatable :: boxes(:)       !< Boxes data.
+   integer(I4P)                                 :: file_unit      !< File unit.
+   integer(I4P)                                 :: blocks_number  !< Blocks number.
+   integer(I4P)                                 :: patches_number !< Patches number.
 
    blocks_number = size(blocks, dim=1)
    open(newunit=file_unit, file=trim(adjustl(file_name)), action='write', status='replace')
@@ -2005,13 +2117,13 @@ contains
       subroutine save_header()
       !< Save header section.
 
-      write(file_unit, '(A)') "'"//trim(cc_par%file_name_input_grd)//"'"
+      write(file_unit, '(A)') "'split-balanced-cc.grd'"
       write(file_unit, '(A)') "'"//trim(cc_par%base_name_output)//"'"
       write(file_unit, '(A)') merge('.true. ', '.false.', cc_par%save_ghost_cells)
       write(file_unit, '(A)') merge('.true. ', '.false.', cc_par%increase_overlap)
       write(file_unit, '(A)') merge('.true. ', '.false.', cc_par%extend_internal_wall)
       write(file_unit, '(A)') ''
-      write(file_unit, '(I0,2X,I0)') cc_par%mgl(1), cc_par%mgl(2)
+      write(file_unit, '(I3,1X,I3)') cc_par%mgl(1), cc_par%mgl(2)
       write(file_unit, '(A)') ''
       write(file_unit, '(ES12.4)') cc_par%boundary_layer_thickness
       write(file_unit, '(ES12.4)') cc_par%numberical_beach
@@ -2022,18 +2134,18 @@ contains
       !< Save blocks section.
       integer(I4P) :: b !< Counter.
 
-      write(file_unit, '(I0,A)') blocks_number, char(9)//'! numero blocchi'
+      write(file_unit, '(I0,A)') blocks_number, char(9)//'! blocks number'
       write(file_unit, '(A)') ''
       do b = 1, blocks_number
-         write(file_unit, '(1X,I0,3X,I0,3X,I0,A)') blocks(b)%level, blocks(b)%group, blocks(b)%priority, &
-            char(9)//'! '//trim(adjustl(blocks(b)%comment))
+         write(file_unit, '(I9,1X,I9,1X,I9,1X,A)') blocks(b)%level, blocks(b)%group, blocks(b)%priority, &
+            '! '//trim(adjustl(blocks(b)%comment))
       enddo
       write(file_unit, '(A)') ''
       endsubroutine save_blocks
 
       subroutine save_patches()
       !< Save patches section.
-      integer(I4P) :: b, p !< Counters.
+      integer(I4P) :: b, p     !< Counters.
       integer(I4P) :: global_p !< Global patch counter.
 
       patches_number = 0
@@ -2041,20 +2153,20 @@ contains
          if (allocated(blocks(b)%patches)) patches_number = patches_number + size(blocks(b)%patches)
       enddo
 
-      write(file_unit, '(I0,A)') patches_number, char(9)//'! numero patches'
+      write(file_unit, '(I0,A)') patches_number, char(9)//'! patches number'
       write(file_unit, '(A)') ''
       global_p = 0
       do b = 1, blocks_number
          if (.not.allocated(blocks(b)%patches)) cycle
          do p = 1, size(blocks(b)%patches)
             global_p = global_p + 1
-            write(file_unit, '(4X,I0,4X,I0,2X,I0,1X,I0,4(1X,I0),2(1X,I0),A)') &
-               blocks(b)%patches(p)%block_index,       &
+            write(file_unit, '(10(I9,1X),A,I9)')        &
+               blocks(b)%patches(p)%block_index,        &
                blocks(b)%patches(p)%face_index,         &
                blocks(b)%patches(p)%boundary_condition, &
                blocks(b)%patches(p)%connect_family,     &
                blocks(b)%patches(p)%ijk_extents(1:6),   &
-               char(9)//'! '//trim(adjustl(blocks(b)%patches(p)%comment))
+               '! ', global_p
          enddo
       enddo
       write(file_unit, '(A)') ''
@@ -2063,13 +2175,14 @@ contains
       subroutine save_edges()
       !< Save edges section (not yet supported).
 
-      write(file_unit, '(I0,A)') 0, char(9)//'! Edge di parete'
+      write(file_unit, '(I0,A)') 0, '! edges number'
       write(file_unit, '(A)') ''
       endsubroutine save_edges
 
       subroutine save_boxes()
       !< Save boxes section.
-      integer(I4P) :: b, n !< Counters.
+      integer(I4P) :: b, n         !< Counter.
+      integer(I4P) :: boxes_number !< Boxes number.
 
       if (allocated(boxes)) then
          boxes_number = size(boxes)
@@ -2077,14 +2190,14 @@ contains
          boxes_number = 0
       endif
 
-      write(file_unit, '(I0,A)') boxes_number, '   ! numero di scatole'
+      write(file_unit, '(I0,A)') boxes_number, ' ! boxes number'
       write(file_unit, '(A)') ''
       if (boxes_number > 0) then
          do b = 1, boxes_number
-            write(file_unit, '(I0,3X,I0,3X,I0,A)') boxes(b)%btype, boxes(b)%bblock, boxes(b)%bgroup, &
-               ' ! tipo, blocco e gruppo associato'
+            write(file_unit, '(I9,1X,I9,1X,I9,1X,A)') boxes(b)%btype, boxes(b)%bblock, boxes(b)%bgroup, &
+               ' ! type, block, group associated'
             do n = 1, 8
-               write(file_unit, '(4X,3(3X,ES23.12))') boxes(b)%nodes(1,n), boxes(b)%nodes(2,n), boxes(b)%nodes(3,n)
+               write(file_unit, '(3(ES23.12,1X))') boxes(b)%nodes(1,n), boxes(b)%nodes(2,n), boxes(b)%nodes(3,n)
             enddo
             write(file_unit, '(A)') ''
          enddo
@@ -2252,7 +2365,7 @@ contains
             print '(A)', '      second block parents list     '//trim(str(sb(2)%parents,.true.))
             print '(A)', '      update blocks data'
             ! recreate unassigned blocks list and reset processes data, thus the blocks assignment restart
-            call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
+            call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number, use_cc_par=use_cc_par)
             call create_blocks_list(blocks=blocks, blocks_list=blocks_list)
             call processes%initialize
             ! update splits history
@@ -2401,19 +2514,19 @@ logical                           :: is_split_done        !< Sentinel to check i
 type(block_object)                :: sb(2)                !< Split blocks.
 integer(I4P)                      :: max_unbalance        !< Maximum processes unbalancing in percent.
 integer(I4P)                      :: i,b,bb,p             !< Counter.
-character(12), parameter          :: FNAME_CC_PAR='cc.par'!< Overset input cc.par file name.
+character(99)                     :: fname_cc_par         !< Overset input cc.par file name.
 
 call parse_command_line(fgrd=file_name_grd,ficc=file_name_icc,fpci=file_name_proc_input,                   &
                         stec=save_block_tecplot,simp=save_imploded,sexp=save_exploded,sbsp=save_bsplit_par,&
-                        uccp=use_cc_par,ebn=exploded_basename,np=procs_number,mu=max_unbalance,mgl=mgl)
+                        uccp=use_cc_par,fccp=fname_cc_par,ebn=exploded_basename,np=procs_number,mu=max_unbalance,mgl=mgl)
 
 if (use_cc_par) then
    ! use grid file (from geogrd without ghost cells) or infocc.out from infocc
-   if     (is_file_found(file_name_grd).and.is_file_found(FNAME_CC_PAR)) then
+   if     (is_file_found(file_name_grd).and.is_file_found(fname_cc_par)) then
       file_name_input = trim(adjustl(file_name_grd))
    else
       write(stderr, '(A)')'error: file "'//trim(adjustl(file_name_grd))//'" or '//&
-                                      '"'//trim(adjustl(FNAME_CC_PAR))//'" not found!'
+                                      '"'//trim(adjustl(fname_cc_par))//'" not found!'
       stop
    endif
 else
@@ -2438,61 +2551,71 @@ call balance_workload(file_name=file_name_input,use_cc_par=use_cc_par,mgl=mgl,  
                       processes=processes,splits=splits,splits_dir=splits_dir,splits_nijk=splits_nijk)
 
 if (use_cc_par) then
-   print '(A)', 'load grd file '//trim(adjustl(file_name_grd))
-   flush(6)
-   call load_file_grd(file_name=file_name_grd,blocks=blocks,blocks_number=blocks_number,gc=0)
-   print '(A)', 'grd file loaded successfully'
-   flush(6)
-
-   print '(A)', 'load parameter file '//trim(adjustl(FNAME_CC_PAR))
-   flush(6)
-   call load_file_cc_par(file_name=FNAME_CC_PAR,cc_par=cc_par,blocks=blocks,boxes=boxes)
-   print '(A)', 'cc.par loaded successfully'
-   flush(6)
-
-   if (allocated(splits)) then
-      print '(A)', 'replay splits on patches'
-      flush(6)
-      call replay_splits_on_patches(blocks=blocks, splits=splits, splits_dir=splits_dir, &
-                                    splits_nijk=splits_nijk, boxes=boxes)
-      blocks_number = size(blocks, dim=1)
-      print '(A)', 'new blocks number after split replay: '//trim(str(blocks_number,.true.))
-   endif
-
-   print '(A)', 'save split cc.par file'
-   call save_file_cc_par('cc-split.par', cc_par, blocks, boxes)
-
-   ! update blocks to processes assignment
-   do p=0, procs_number - 1
-      do b=1, size(processes(p)%blocks,dim=1)
-         bb = processes(p)%blocks(b)
-         if (bb>0 .and. bb<=blocks_number) blocks(bb)%proc = p
-      enddo
-   enddo
-   call save_proc_input(blocks=blocks, file_name=file_name_proc_input)
+   print '(A)', 'load blocks grid from file '//trim(adjustl(file_name_input))
+   call load_file_grd(file_name=file_name_input,blocks=blocks,blocks_number=blocks_number,gc=0)
+   print '(A)', 'load parameter file '//trim(adjustl(fname_cc_par))
+   call load_file_cc_par(file_name=fname_cc_par,cc_par=cc_par,blocks=blocks,boxes=boxes)
 else
-   print '(A)', 'load grd file '//trim(adjustl(file_name_grd))
-   call load_file_grd(file_name=file_name_grd,blocks=blocks,blocks_number=blocks_number)
-
+   print '(A)', 'load blocks grid from file '//trim(adjustl(file_name_input))
+   call load_file_grd(file_name=file_name_input,blocks=blocks,blocks_number=blocks_number)
    print '(A)', 'load icc file '//trim(adjustl(file_name_icc))
    call load_file_icc(file_name=file_name_icc,blocks=blocks,blocks_number=blocks_number,rcc=rcc)
-   print '(A)', 'finish load input files'
-
    print '(A)', 'parse global rcc and create block-local-rcc'
    do b=1, blocks_number
       call blocks(b)%parse_rcc(rcc=rcc)
       print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
    enddo
-   print '(A)', 'finish parse global rcc'
 endif
 
-if (.not.use_cc_par.and.allocated(splits)) then
+if (use_cc_par) then
+   ! if (allocated(splits)) then
+   !    print '(A)', 'replay splits on patches'
+   !    flush(6)
+   !    call replay_splits_on_patches(blocks=blocks, splits=splits, splits_dir=splits_dir, &
+   !                                  splits_nijk=splits_nijk, boxes=boxes)
+   !    blocks_number = size(blocks, dim=1)
+   !    print '(A)', 'new blocks number after split replay: '//trim(str(blocks_number,.true.))
+   ! endif
+   ! print '(A)', 'save split cc.par file'
+   ! call save_file_cc_par('split-balanced-cc.par', cc_par, blocks, boxes)
+endif
+
+if (allocated(splits)) then
    print '(A)', 'split blocks'
    do b=1, size(splits,dim=1)
       print '(A)', '  block '//trim(str(splits(b),.true.))
-      call blocks(splits(b))%split(mgl=mgl, is_split_done=is_split_done, sb=sb, split_data=.true.)
+      call blocks(splits(b))%split(mgl=mgl, is_split_done=is_split_done, sb=sb, split_data=.true., use_cc_par=use_cc_par)
+      ! debuuuuggg
+      print*, 'cazzo b',splits(b),splits_dir(b)
+      print*, 'cazzo                       p,          b,            face,     bc,         conn,         ijk'
+      do p=1, size(blocks(splits(b))%patches,dim=1)
+         print*, 'cazzo block        ',blocks(splits(b))%patches(p)%patch_index,&
+                                       blocks(splits(b))%patches(p)%block_index,&
+                                       blocks(splits(b))%patches(p)%face_index,&
+                                       blocks(splits(b))%patches(p)%boundary_condition,&
+                                       blocks(splits(b))%patches(p)%connect_family,&
+                                       blocks(splits(b))%patches(p)%ijk_extents
+         print*, 'cazzo split block 1',sb(1)%patches(p)%patch_index,&
+                                       sb(1)%patches(p)%block_index,&
+                                       sb(1)%patches(p)%face_index,&
+                                       sb(1)%patches(p)%boundary_condition,&
+                                       sb(1)%patches(p)%connect_family,&
+                                       sb(1)%patches(p)%ijk_extents
+         print*, 'cazzo split block 2',sb(2)%patches(p)%patch_index,&
+                                       sb(2)%patches(p)%block_index,&
+                                       sb(2)%patches(p)%face_index,&
+                                       sb(2)%patches(p)%boundary_condition,&
+                                       sb(2)%patches(p)%connect_family,&
+                                       sb(2)%patches(p)%ijk_extents
+      enddo
+  ! integer(I4P) :: patch_index=0         !< Patch index, local numeration.
+  ! integer(I4P) :: block_index=0         !< Block to which patch belongs, local numeration.
+  ! integer(I4P) :: face_index=0          !< Face index in the overset convention: Imin=>1, Imax=2,Jmin=3, Jmax=4, Kmin=5, Kmax=6.
+  ! integer(I4P) :: boundary_condition=0  !< Boundary condition (or IJK orientation) in the overset convention.
+  ! integer(I4P) :: connect_family=0      !< Index of connected patch or family index of the patch.
+      stop
       if (is_split_done) then
-         call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number)
+         call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number, use_cc_par=use_cc_par)
          print '(A)', '     new blocks number '//trim(str(blocks_number,.true.))
          ! free sb memory immediately after update_blocks copies the data
          call sb(1)%destroy
@@ -2521,17 +2644,18 @@ endif
 
 if (save_imploded) then
    print '(A)', 'implode exploded blocks'
-   call implode_blocks(blocks=blocks, rcc=rcc)
-   print '(A)', 'total chimera elements after implosion'//trim(str(size(rcc,dim=1)))
-   do b=1, blocks_number
-      print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
-   enddo
-   print '(A)', 'save imploded blocks in legacy overset format (split and load-balanced)'
-   call save_file_grd(file_name='split-balanced-'//trim(adjustl(file_name_grd)), blocks=blocks)
-   call save_file_icc(file_name='split-balanced-'//trim(adjustl(file_name_icc)), blocks=blocks, rcc=rcc)
+   if (.not.use_cc_par) then
+      call implode_blocks(blocks=blocks, rcc=rcc)
+      print '(A)', 'total chimera elements after implosion'//trim(str(size(rcc,dim=1)))
+      do b=1, blocks_number
+         print '(A)', 'block '//trim(str(b,.true.))//' BC chimera cells number: '//trim(str(size(blocks(b)%chimera,dim=1)))
+      enddo
+      call save_file_icc(file_name='split-balanced-cc', blocks=blocks, rcc=rcc)
+   endif
+   call save_file_grd(file_name='split-balanced-cc.grd', blocks=blocks)
 endif
 contains
-   subroutine parse_command_line(fgrd,ficc,fpci,stec,simp,sexp,sbsp,uccp,ebn,np,mu,mgl)
+   subroutine parse_command_line(fgrd,ficc,fpci,stec,simp,sexp,sbsp,uccp,fccp,ebn,np,mu,mgl)
    !< Parse command line inputs.
    character(*), intent(out) :: fgrd      !< Grid file name.
    character(*), intent(out) :: ficc      !< Icc file name.
@@ -2541,6 +2665,7 @@ contains
    logical,      intent(out) :: sexp      !< Save exploded blocks.
    logical,      intent(out) :: sbsp      !< Save bsplit.par.
    logical,      intent(out) :: uccp      !< Use cc.par overset input instead of overset output.
+   character(*), intent(out) :: fccp      !< File name of cc.par.
    character(*), intent(out) :: ebn       !< Exploded files basename.
    integer(I4P), intent(out) :: np        !< Number of processes.
    integer(I4P), intent(out) :: mu        !< Maximum processes unbalancing in percent.
@@ -2606,6 +2731,9 @@ contains
          ebn = trim(adjustl(ca_buffer))
       case('-use-cc-par')
          uccp = .true.
+         a = a + 1
+         call get_command_argument(a, ca_buffer)
+         fccp = trim(adjustl(ca_buffer))
       case('-h','--help')
          call print_help
          stop
@@ -2635,7 +2763,7 @@ contains
    write(*, '(A)')'   -save-imploded                   => save imploded blocks after explosion, default .false.'
    write(*, '(A)')'   -save-exploded                   => save exploded blocks, default .false.'
    write(*, '(A)')'   -exploded-basename               => exploded files basename, default "exploded-"'
-   write(*, '(A)')'   -use-cc-par                      => use cc.par overset input insteod of overset output, default .false.'
+   write(*, '(A)')'   -use-cc-par file_name_cc_par     => use cc.par overset input insteod of overset output, default .false.'
    write(*, '(A)')'   -h, --help                       => print this help message'
    write(*, '(A)')'examples:'
    write(*, '(A)')'   overset-exploded -np 32'

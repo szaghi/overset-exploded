@@ -388,30 +388,30 @@ contains
    np1 = size(sb(1)%patches,dim=1)
    do p=1, size(self%patches,dim=1)
       ! shift connection family
-      if (self%patches(p)%is_connection) then
-         if     (self%patches(p)%connect_family < sb(1)%patches(1  )%patch_index) then
-            ! do nothing, patch index is not moved
-         elseif (self%patches(p)%connect_family > sb(1)%patches(np1)%patch_index) then
-            ! shift connection patch
-            self%patches(p)%connect_family = self%patches(p)%connect_family + 6
-         else
-            ! there is a connection to a patch that could have been split
-            face_min = 1 + (sb(1)%split_dir-1) * 2
-            face_max = 2 + (sb(1)%split_dir-1) * 2
-            if      (self%patches(p)%face_index==face_min) then
-               ! do nothing, patch index is not moved
-            elseif  (self%patches(p)%face_index==face_max) then
-               ! shift connection patch
-               self%patches(p)%connect_family = self%patches(p)%connect_family + 6
-            else
-               ! the connection is to a patch that has been split, we need to ammend connection extents and add new sub-patch
-            endif
-         endif
-      endif
+      ! if (self%patches(p)%is_connection) then
+      !    if     (self%patches(p)%connect_family < sb(1)%patches(1  )%patch_index) then
+      !       ! do nothing, patch index is not moved
+      !    elseif (self%patches(p)%connect_family > sb(1)%patches(np1)%patch_index) then
+      !       ! shift connection patch
+      !       self%patches(p)%connect_family = self%patches(p)%connect_family + 6
+      !    else
+      !       ! there is a connection to a patch that could have been split
+      !       face_min = 1 + (sb(1)%split_dir-1) * 2
+      !       face_max = 2 + (sb(1)%split_dir-1) * 2
+      !       if      (self%patches(p)%face_index==face_min) then
+      !          ! do nothing, patch index is not moved
+      !       elseif  (self%patches(p)%face_index==face_max) then
+      !          ! shift connection patch
+      !          self%patches(p)%connect_family = self%patches(p)%connect_family + 6
+      !       else
+      !          ! the connection is to a patch that has been split, we need to ammend connection extents and add new sub-patch
+      !       endif
+      !    endif
+      ! endif
       ! shift patch index
-      if (self%patches(p)%patch_index>sb(1)%patches(np1)%patch_index) then
-         self%patches(p)%patch_index = self%patches(p)%patch_index + 6
-      endif
+      ! if (self%patches(p)%patch_index>sb(1)%patches(np1)%patch_index) then
+      !    self%patches(p)%patch_index = self%patches(p)%patch_index + 6
+      ! endif
       ! shift patch block index
       if (self%patches(p)%block_index>sb(1)%ab) then
          self%patches(p)%block_index = self%patches(p)%block_index + 1
@@ -529,7 +529,7 @@ contains
    endassociate
    endsubroutine save_block_file
 
-   pure subroutine split(self, mgl, is_split_done, sb, split_data, use_cc_par)
+   subroutine split(self, mgl, is_split_done, sb, split_data, use_cc_par)
    !< Split block. Split current block (if possible), along a the largest direction, in half: the first
    !< Block substitute current block, the other is added to blocks list.
    class(block_object), intent(in)           :: self          !< Block data.
@@ -577,6 +577,8 @@ contains
          call split_nodes(gc=self%gc,nodes=self%nodes,delta=delta,sb=sb)
          if (use_cc_par_) then
             call split_patches(patches=self%patches,delta=delta,sb=sb)
+            print*, 'cazzo padre ', allocated(self%patches)
+            print*, 'cazzo figlio 1 ', allocated(sb(1)%patches)
          else
             call split_tcc(tcc=self%tcc,delta=delta,gc=self%gc,sb=sb)
             call split_chimera(chimera=self%chimera,delta=delta,nadj=nadj,sb_n=1,ab_ob=sb(2)%ab,bs=sb(1))
@@ -886,7 +888,7 @@ contains
                ! overlaps with sb(1): extent range [ext_lo, min(ext_hi, Ns1)]
                p1 = p1 + 1
                patches1(p1)             = patches(p)
-               patches1(p1)%block_index = sb(1)%ab
+               patches1(p1)%block_index = -sb(1)%ab
                if (patches1(p1)%ijk_extents(ext_hi) > Ns1) patches1(p1)%ijk_extents(ext_hi) = Ns1
                ! Cap extents to sb(1) dimensions
                patches1(p1)%ijk_extents(1) = min(patches1(p1)%ijk_extents(1), sb(1)%Ni)
@@ -900,7 +902,7 @@ contains
                ! overlaps with sb(2): shift extents to sb(2) local coordinates
                p2 = p2 + 1
                patches2(p2)             = patches(p)
-               patches2(p2)%block_index = sb(2)%ab
+               patches2(p2)%block_index = -sb(2)%ab
                patches2(p2)%ijk_extents(ext_lo) = max(patches(p)%ijk_extents(ext_lo), Ns1) - Ns1
                patches2(p2)%ijk_extents(ext_hi) = patches(p)%ijk_extents(ext_hi) - Ns1
                ! Cap extents to sb(2) dimensions
@@ -945,12 +947,14 @@ contains
       np = size(patches1,dim=1)
       do p1=1, np
          if (patches1(p1)%boundary_condition>0) then
-            if (patches1(p1)%connect_family>patches1(np)%patch_index) patches1(p1)%connect_family=patches1(p1)%connect_family+6
+            if (patches1(p1)%connect_family>patches1(np)%patch_index) &
+               patches1(p1)%connect_family=patches1(p1)%connect_family+size(patches1,dim=1)
          endif
       enddo
       do p2=1, size(patches2,dim=1)
          if (patches2(p2)%boundary_condition>0) then
-            if (patches2(p2)%connect_family>patches1(np)%patch_index) patches2(p2)%connect_family=patches2(p2)%connect_family+6
+            if (patches2(p2)%connect_family>patches1(np)%patch_index) &
+               patches2(p2)%connect_family=patches2(p2)%connect_family+size(patches1,dim=1)
          endif
       enddo
 
@@ -1675,23 +1679,85 @@ contains
 
    subroutine update_blocks(blocks, sb, blocks_number, use_cc_par)
    !< Update blocks data after a block split.
-   type(block_object), intent(inout), allocatable :: blocks(:)     !< Blocks data.
-   type(block_object), intent(inout)              :: sb(1:)        !< Split blocks.
-   integer(I4P),       intent(out)                :: blocks_number !< Blocks number.
-   logical,            intent(in)                 :: use_cc_par    !< Use cc.par instead of icc.
-   type(block_object), allocatable                :: blocks_(:)    !< New blocks data.
-   integer(I4P)                                   :: b             !< Counter.
+   type(block_object), intent(inout), allocatable :: blocks(:)        !< Blocks data.
+   type(block_object), intent(inout)              :: sb(1:)           !< Split blocks.
+   integer(I4P),       intent(out)                :: blocks_number    !< Blocks number.
+   logical,            intent(in)                 :: use_cc_par       !< Use cc.par instead of icc.
+   type(block_object), allocatable                :: blocks_(:)       !< New blocks data.
+   type(patch_object)                             :: split_patches(2) !< Split patches couple.
+   type(patch_object)                             :: new_patch        !< New patch.
+   logical                                        :: found_new_patch  !< Sentinel to check new patch.
+   integer(I4P)                                   :: sbm_ijk          !< Split block minimum ijk patch extent.
+   integer(I4P)                                   :: new_ijk          !< New patch minimum ijk extent.
+   integer(I4P)                                   :: b, p, pp, ppp    !< Counter.
 
    blocks_number = size(blocks,dim=1)
-   ! sanitize old chimera data
-   do b=1, blocks_number
-      if (b==sb(1)%ab) cycle ! split block does not need to be santized, it is replaced by sb
-      if (use_cc_par) then
-         call blocks(b)%sanitize_patches(sb=sb)
-      else
+   if (use_cc_par.and.allocated(sb(1)%patches)) then
+      ! sanitize patches of cc.par
+      do p=1, size(sb(1)%patches,dim=1)
+         if (sb(1)%patches(p)%block_index<0.and.sb(1)%patches(p)%is_connection) then
+            split_patches(1) = sb(1)%patches(p)
+            ! this is a new split patch, find the sb(2) correspective
+            do pp=1, size(sb(2)%patches,dim=1)
+               if (sb(2)%patches(pp)%connect_family==sb(1)%patches(p)%connect_family) then
+                  split_patches(2) = sb(2)%patches(pp)
+                  exit
+               endif
+            enddo
+            ! with the couple patches amend connected blocks patches
+            do b=1, blocks_number
+               if (b==sb(1)%ab) cycle ! split block does not need to be santized, it is replaced by sb
+               found_new_patch = .false.
+               loop_on_block_patches : do ppp=1, size(blocks(b)%patches,dim=1)
+                  if (blocks(b)%patches(ppp)%is_connection.and.&
+                      blocks(b)%patches(ppp)%connect_family==split_patches(1)%connect_family) then
+                      found_new_patch = .true.
+                      ! split block patch adding a new one
+                      new_patch = blocks(b)%patches(ppp)
+                      select case(sb(1)%split_dir)
+                      case(1)
+                         sbm_ijk = 1
+                         ! first digit of ijk orientation
+                         new_ijk = split_patches(1)%boundary_condition/100
+                      case(2)
+                         sbm_ijk = 3
+                         ! second digit of ijk orientation
+                         new_ijk = mod(split_patches(1)%boundary_condition/10, 10)
+                      case(3)
+                         sbm_ijk = 5
+                         ! third digit of ijk orientation
+                         new_ijk = mod(split_patches(1)%boundary_condition, 10)
+                      endselect
+                      select case(new_ijk)
+                      case(1,2)
+                         blocks(b)%patches(ppp)%ijk_extents(1:2) = split_patches(1)%ijk_extents(sbm_ijk:sbm_ijk+1)
+                                      new_patch%ijk_extents(1:2) = split_patches(2)%ijk_extents(sbm_ijk:sbm_ijk+1)
+                      case(3,4)
+                         blocks(b)%patches(ppp)%ijk_extents(3:4) = split_patches(1)%ijk_extents(sbm_ijk:sbm_ijk+1)
+                                      new_patch%ijk_extents(3:4) = split_patches(2)%ijk_extents(sbm_ijk:sbm_ijk+1)
+                      case(5,6)
+                         blocks(b)%patches(ppp)%ijk_extents(5:6) = split_patches(1)%ijk_extents(sbm_ijk:sbm_ijk+1)
+                                      new_patch%ijk_extents(5:6) = split_patches(2)%ijk_extents(sbm_ijk:sbm_ijk+1)
+                      endselect
+                      new_patch%connect_family = split_patches(2)%patch_index
+                      exit loop_on_block_patches
+                  endif
+               enddo loop_on_block_patches
+               if (found_new_patch) blocks(b)%patches = [blocks(b)%patches, new_patch]
+            enddo
+         endif
+      enddo
+      ! do b=1, blocks_number
+      !    if (b==sb(1)%ab) cycle ! split block does not need to be santized, it is replaced by sb
+      !    call blocks(b)%sanitize_patches(sb=sb)
+      ! enddo
+   else
+      ! sanitize chimera data
+      do b=1, blocks_number
+         if (b==sb(1)%ab) cycle ! split block does not need to be santized, it is replaced by sb
          call blocks(b)%sanitize_chimera(sb=sb)
-      endif
-   enddo
+      enddo
+   endif
    ! ab shift
    do b=sb(2)%ab, blocks_number
       blocks(b)%ab = blocks(b)%ab + 1
@@ -2074,6 +2140,9 @@ if (allocated(splits)) then
    splits_loop : do b=1, size(splits,dim=1)
       print '(A)', '  block '//trim(str(splits(b),.true.))
       print*, 'cazzo patches before split'
+      do p=1, size(blocks(splits(b)-2)%patches,dim=1)
+         print*, 'cazzo ',trim(blocks(splits(b)-2)%patches(p)%description())
+      enddo
       do p=1, size(blocks(splits(b)-1)%patches,dim=1)
          print*, 'cazzo ',trim(blocks(splits(b)-1)%patches(p)%description())
       enddo
@@ -2088,6 +2157,9 @@ if (allocated(splits)) then
          call update_blocks(blocks=blocks, sb=sb, blocks_number=blocks_number, use_cc_par=use_cc_par)
          print*, 'cazzo split dir ', sb(1)%split_dir
          print*, 'cazzo patches after split'
+         do p=1, size(blocks(splits(b)-2)%patches,dim=1)
+            print*, 'cazzo ',trim(blocks(splits(b)-2)%patches(p)%description())
+         enddo
          do p=1, size(blocks(splits(b)-1)%patches,dim=1)
             print*, 'cazzo ',trim(blocks(splits(b)-1)%patches(p)%description())
          enddo
